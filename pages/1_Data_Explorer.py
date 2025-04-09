@@ -26,60 +26,69 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-def generate_component_html(css="", template="", script=""):
-    # Combine CSS, HTML template, and JS script into a single HTML document string
-    return f"""
-        <!DOCTYPE html>
-        <html lang="en">
-            <head>
-                <link href='https://fonts.googleapis.com/css?family=Poppins' rel='stylesheet'>
-                <link href='https://fonts.googleapis.com/css?family=Playfair Display' rel='stylesheet'>
-                <meta charset="UTF-8" />
-                <title>Data Explorer Table</title>
-                <script>
-                    // Standard Streamlit component communication boilerplate
-                    function sendMessageToStreamlitClient(type, data) {{
-                        const outData = Object.assign({{
-                            isStreamlitMessage: true,
-                            type: type,
-                        }}, data);
-                        window.parent.postMessage(outData, "*");
-                    }}
+def generate_component(name, template="", script=""):
+    def html():
+        return f"""
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <link href='https://fonts.googleapis.com/css?family=Poppins' rel='stylesheet'>
+                    <link href='https://fonts.googleapis.com/css?family=Playfair Display' rel='stylesheet'>
+                    <meta charset="UTF-8" />
+                    <title>{name}</title>
+                    <script>
+                        function sendMessageToStreamlitClient(type, data) {{
+                            const outData = Object.assign({{
+                                isStreamlitMessage: true,
+                                type: type,
+                            }}, data);
+                            window.parent.postMessage(outData, "*");
+                        }}
 
-                    const Streamlit = {{
-                        setComponentReady: function() {{
-                            sendMessageToStreamlitClient("streamlit:componentReady", {{apiVersion: 1}});
-                        }},
-                        setFrameHeight: function(height) {{
-                            sendMessageToStreamlitClient("streamlit:setFrameHeight", {{height: height}});
-                        }},
-                        setComponentValue: function(value) {{
-                            // If you need to send data back to Streamlit, keep this
-                            sendMessageToStreamlitClient("streamlit:setComponentValue", {{value: value}});
-                        }},
-                        RENDER_EVENT: "streamlit:render",
-                        events: {{
-                            addEventListener: function(type, callback) {{
-                                window.addEventListener("message", function(event) {{
-                                    if (event.data.type === type) {{
-                                        event.detail = event.data
-                                        callback(event);
-                                    }}
-                                }});
+                        const Streamlit = {{
+                            setComponentReady: function() {{
+                                sendMessageToStreamlitClient("streamlit:componentReady", {{apiVersion: 1}});
+                            }},
+                            setFrameHeight: function(height) {{
+                                sendMessageToStreamlitClient("streamlit:setFrameHeight", {{height: height}});
+                            }},
+                            setComponentValue: function(value) {{
+                                sendMessageToStreamlitClient("streamlit:setComponentValue", {{value: value}});
+                            }},
+                            RENDER_EVENT: "streamlit:render",
+                            events: {{
+                                addEventListener: function(type, callback) {{
+                                    window.addEventListener("message", function(event) {{
+                                        if (event.data.type === type) {{
+                                            event.detail = event.data
+                                            callback(event);
+                                        }}
+                                    }});
+                                }}
                             }}
                         }}
-                    }}
-                </script>
-                {css} 
-            </head>
-        <body>
-        {template}
-        </body>
-        <script>
-            {script} 
-        </script>
-        </html>
-    """
+                    </script>
+                </head>
+            <body>
+            {template}
+            </body>
+            <script>
+                {script}
+            </script>
+            </html>
+        """
+
+    dir = f"{tempfile.gettempdir()}/{name}"
+    if not os.path.isdir(dir): os.mkdir(dir)
+    fname = f'{dir}/index.html'
+    with open(fname, 'w') as f:
+        f.write(html())
+    
+    func = components.declare_component(name, path=str(dir))
+    def f(**params):
+        component_value = func(**params)
+        return component_value
+    return f
 
 # *** IMPORTANT: Process the Parquet file before running this script (See README.md) ***
 parquet_source_path = ("data.parquet")
@@ -1922,10 +1931,6 @@ script = """
     Streamlit.setComponentReady();
 """
 
-# Generate the full HTML for the component
-component_html_content = generate_component_html(css=css, template=template, script=script)
-
-# Use components.html to render the component
-# Set a reasonable initial height; the JS script's adjustHeight/setFrameHeight will handle the dynamic resizing.
-# scrolling=False is important when the component manages its own height.
-components.html(component_html_content, height=1200, scrolling=False)
+# Create and use the component
+table_component = generate_component('searchable_table', template=css + template, script=script)
+table_component(key="kickstarter_table")
