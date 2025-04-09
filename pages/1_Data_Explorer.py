@@ -78,20 +78,32 @@ def generate_component(name, template="", script=""):
             </html>
         """
 
-    dir = f"{tempfile.gettempdir()}/{name}"
-    if not os.path.isdir(dir): os.mkdir(dir)
-    fname = f'{dir}/index.html'
-    with open(fname, 'w') as f:
+    # Determine the root directory (one level up from 'pages')
+    root_dir = os.path.dirname(os.path.dirname(__file__))
+    # Define the path for the components directory within the root
+    components_base_dir = os.path.join(root_dir, 'components')
+    # Define the specific directory for this component
+    component_dir = os.path.join(components_base_dir, name)
+
+    # Create the directories if they don't exist
+    os.makedirs(component_dir, exist_ok=True)
+
+    # Define the path for the index.html file
+    fname = os.path.join(component_dir, 'index.html')
+
+    with open(fname, 'w', encoding='utf-8') as f: # Added encoding='utf-8' for robustness
         f.write(html())
-    
-    func = components.declare_component(name, path=str(dir))
+
+    # Declare the component using the relative path within the app structure
+    func = components.declare_component(name, path=component_dir)
+
     def f(**params):
         component_value = func(**params)
         return component_value
     return f
 
 # *** IMPORTANT: Process the Parquet file before running this script (See README.md) ***
-parquet_source_path = ("data.parquet")
+parquet_source_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data.parquet")
 
 if not os.path.exists(parquet_source_path):
     st.error(f"Parquet data source not found at '{parquet_source_path}'. Please ensure the file/directory exists in the project root.")
