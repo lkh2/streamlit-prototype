@@ -3,7 +3,7 @@ import streamlit as st
 st.set_page_config(
     layout="wide", 
     page_icon="📊", 
-    page_title="Model",
+    page_title="AI Prediction",
     initial_sidebar_state="collapsed"
 )
 
