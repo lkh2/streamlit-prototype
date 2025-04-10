@@ -238,6 +238,8 @@ if 'base_lf' not in st.session_state:
 # --- Filtering and Sorting Logic ---
 def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> pl.LazyFrame:
     """Applies filters and sorting to a LazyFrame."""
+    # Get column names once to avoid repeated schema resolution
+    column_names = lf.collect_schema().names()
 
     # 1. Text Search (Apply across relevant text columns)
     search_term = filters.get('search', '')
@@ -245,7 +247,7 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         # Add columns you want to search here
         search_cols = ['Project Name', 'Creator', 'Category', 'Subcategory']
         # Filter columns that actually exist in the frame
-        valid_search_cols = [col for col in search_cols if col in lf.columns]
+        valid_search_cols = [col for col in search_cols if col in column_names]
         if valid_search_cols:
             search_expr = None
             for col in valid_search_cols:
@@ -260,28 +262,28 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
                  lf = lf.filter(search_expr)
 
     # 2. Categorical Filters
-    if 'Category' in lf.columns and filters['categories'] != ['All Categories']:
+    if 'Category' in column_names and filters['categories'] != ['All Categories']:
         lf = lf.filter(pl.col('Category').is_in(filters['categories']))
-    if 'Subcategory' in lf.columns and filters['subcategories'] != ['All Subcategories']:
+    if 'Subcategory' in column_names and filters['subcategories'] != ['All Subcategories']:
         # Handle potential interaction with category filter if needed, assuming independent for now
         lf = lf.filter(pl.col('Subcategory').is_in(filters['subcategories']))
-    if 'Country' in lf.columns and filters['countries'] != ['All Countries']:
+    if 'Country' in column_names and filters['countries'] != ['All Countries']:
         lf = lf.filter(pl.col('Country').is_in(filters['countries']))
 
     # State Filter - Now operates on the raw 'State' column
-    if 'State' in lf.columns and filters['states'] != ['All States']:
+    if 'State' in column_names and filters['states'] != ['All States']:
         # Filter using the raw state values, case-insensitively
         lf = lf.filter(pl.col('State').cast(pl.Utf8).str.to_lowercase().is_in([s.lower() for s in filters['states']]))
 
     # 3. Range Filters
     ranges = filters.get('ranges', {})
-    if 'Raw Pledged' in lf.columns and 'pledged' in ranges:
+    if 'Raw Pledged' in column_names and 'pledged' in ranges:
         min_p, max_p = ranges['pledged']['min'], ranges['pledged']['max']
         lf = lf.filter((pl.col('Raw Pledged') >= min_p) & (pl.col('Raw Pledged') <= max_p))
-    if 'Raw Goal' in lf.columns and 'goal' in ranges:
+    if 'Raw Goal' in column_names and 'goal' in ranges:
         min_g, max_g = ranges['goal']['min'], ranges['goal']['max']
         lf = lf.filter((pl.col('Raw Goal') >= min_g) & (pl.col('Raw Goal') <= max_g))
-    if 'Raw Raised' in lf.columns and 'raised' in ranges:
+    if 'Raw Raised' in column_names and 'raised' in ranges:
         min_r, max_r = ranges['raised']['min'], ranges['raised']['max']
         # Handle division by zero for goal if necessary for percentage calculation
         # Ensure 'Raw Raised' column exists and represents the percentage directly, or calculate it
@@ -291,7 +293,7 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
 
     # 4. Date Filter
     date_filter = filters.get('date', 'All Time')
-    if date_filter != 'All Time' and 'Raw Date' in lf.columns:
+    if date_filter != 'All Time' and 'Raw Date' in column_names:
         now = datetime.datetime.now()
         compare_date = None
         if date_filter == 'Last Month':
@@ -332,7 +334,7 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         sort_col = 'Raw Deadline'
         sort_descending = True # Assuming latest ending first
 
-    if sort_col in lf.columns:
+    if sort_col in column_names:
         lf = lf.sort(sort_col, descending=sort_descending, nulls_last=True)
     else:
         print(f"Warning: Sort column '{sort_col}' not found in LazyFrame.")
@@ -1886,8 +1888,8 @@ filtered_lf = apply_filters_and_sort(
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    # Use fetch instead of collect for potentially faster count on some backends
-    total_rows_result = filtered_lf.select(pl.count()).collect()
+    # Use pl.len() instead of pl.count()
+    total_rows_result = filtered_lf.select(pl.len()).collect()
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
@@ -1907,7 +1909,8 @@ if st.session_state.total_rows > 0 and offset < st.session_state.total_rows : # 
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True) # Use streaming engine if beneficial
+        # Use streamable=True instead of streaming=True
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streamable=True)
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
     except Exception as e:
