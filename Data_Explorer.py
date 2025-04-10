@@ -361,9 +361,17 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
 
 # --- Generate HTML for the *current page* data ---
 def generate_table_html_for_page(df_page: pl.DataFrame):
+    # Define visible columns *before* checking if df_page is empty
     visible_columns = ['Project Name', 'Creator', 'Pledged Amount', 'Link', 'Country', 'State']
+    header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
 
-    # Check required cols *exist* in the dataframe schema, not necessarily fetched for every row if null
+    # Check if the DataFrame is empty *or* if essential columns are missing
+    # This handles the case where the DataFrame is empty OR has unexpected structure
+    if df_page.is_empty():
+        colspan = len(visible_columns) if visible_columns else 1
+        return header_html, f'<tr><td colspan="{colspan}">No projects match the current filters.</td></tr>'
+
+    # --- Moved Column Check: Only check if df_page is NOT empty ---
     required_data_cols = [
         'Category', 'Subcategory', 'Raw Pledged', 'Raw Goal', 'Raw Raised',
         'Raw Date', 'Raw Deadline', 'Backer Count', 'Popularity Score'
@@ -374,18 +382,18 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
     missing_cols = [col for col in all_needed_cols if col not in df_page.columns]
     if missing_cols:
         st.error(f"FATAL: Missing required columns in fetched data page: {missing_cols}. Check base Parquet schema and processing.")
-        # Return empty if critical columns are missing
-        # Ensure visible_columns only contains existing columns before generating header
-        visible_columns = [col for col in visible_columns if col in df_page.columns]
-        header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
-        return header_html, f'<tr><td colspan="{len(visible_columns) if visible_columns else 1}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
+        colspan = len(visible_columns) if visible_columns else 1
+        # Ensure visible_columns only contains existing columns before generating header for error message
+        header_html_error = ''.join(f'<th scope="col">{col}</th>' for col in visible_columns if col in df_page.columns) # Use available cols for error header
+        return header_html_error, f'<tr><td colspan="{colspan}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
+    # --- End Moved Column Check ---
 
 
-    header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
     rows_html = ''
 
-    if df_page.is_empty():
-        return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
+    # --- Removed redundant empty check, covered above ---
+    # if df_page.is_empty():
+    #     return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
 
     try:
         data_dicts = df_page.to_dicts()
@@ -405,8 +413,10 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
 
         # Data attributes for potential client-side use (though filtering is server-side)
         # Ensure dates are formatted correctly if not None
-        raw_date_str = row.get('Raw Date').strftime('%Y-%m-%d') if row.get('Raw Date') else 'N/A'
-        raw_deadline_str = row.get('Raw Deadline').strftime('%Y-%m-%d') if row.get('Raw Deadline') else 'N/A'
+        raw_date = row.get('Raw Date')
+        raw_deadline = row.get('Raw Deadline')
+        raw_date_str = raw_date.strftime('%Y-%m-%d') if raw_date else 'N/A'
+        raw_deadline_str = raw_deadline.strftime('%Y-%m-%d') if raw_deadline else 'N/A'
         data_attrs = f'''
             data-category="{html.escape(str(row.get('Category', 'N/A')))}"
             data-subcategory="{html.escape(str(row.get('Subcategory', 'N/A')))}"
@@ -1813,11 +1823,11 @@ class TableManager {
         // Store the fillSlider function in the shared object
         this.rangeSliderElements.fillSlider = fillSlider;
 
-        // --- REMOVED Debounced Update Request ---
-        // const debouncedRangeUpdate = debounce(() => {
-        //     this.currentPage = 1; // Reset page on range change
-        //     this.requestUpdate();
-        // }, 600);
+        // --- REINTRODUCED Debounced Update Request ---
+        const debouncedRangeUpdate = debounce(() => {
+            this.currentPage = 1; // Reset page on range change
+            this.requestUpdate();
+        }, 400); // Debounce update request by 400ms
 
 
         // --- Control Logic (Handles Slider/Input Interactions) ---
@@ -1875,17 +1885,17 @@ class TableManager {
         // --- Event Listener Setup ---
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
             // 'input' event for immediate visual feedback during sliding/typing
-            // AND request update immediately (no debounce)
-            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); this.requestUpdate(); });
-            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); this.requestUpdate(); });
-            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); this.requestUpdate(); });
-            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); this.requestUpdate(); });
+            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
 
-            // Use 'change' event on sliders/inputs to ensure final value is sent (no debounce needed here either)
-            fSlider.addEventListener('change', () => { this.requestUpdate(); });
-            tSlider.addEventListener('change', () => { this.requestUpdate(); });
-            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); this.requestUpdate(); });
-            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); this.requestUpdate(); });
+            // Use 'change' event on inputs to ensure final value is sent *if* user types then clicks away
+            // Debounce this as well, or send immediately? Let's debounce to be consistent.
+            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+
+             // No need for 'change' on sliders if 'input' is already debouncing the update
         };
 
 
@@ -2031,8 +2041,10 @@ filtered_lf = apply_filters_and_sort(
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    total_rows_result = filtered_lf.select(pl.len()).collect(engine="streaming")
-    st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
+    # Optimization: Select only a single constant column for counting
+    total_rows_result = filtered_lf.select(pl.lit(1).alias("count")).collect(engine="streaming")
+    # st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
+    st.session_state.total_rows = total_rows_result.height # Getting height is usually efficient enough
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
 except Exception as e:
@@ -2045,32 +2057,48 @@ total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
-df_page = pl.DataFrame()
+# --- Define is_state_filter_active BEFORE the try block ---
+is_state_filter_active = ('states' in st.session_state.filters and
+                           isinstance(st.session_state.filters['states'], list) and # Add list check
+                           st.session_state.filters['states'] != ['All States'])
+
+df_page = pl.DataFrame() # Initialize as empty DataFrame
 if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        # Add check for specific state filter case
-        is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States']
+
         if is_state_filter_active:
              print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
 
         df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming")
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
-        if is_state_filter_active:
-             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF
+
+        # --- Move debug logging inside the try block and check df_page ---
+        if is_state_filter_active and not df_page.is_empty():
+             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF only if df_page is not empty
+        elif is_state_filter_active and df_page.is_empty():
+             print(f"DEBUG: State filter active, but no rows returned for this page.")
+
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
+        df_page = pl.DataFrame() # Ensure df_page is empty on error
 else:
      print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}")
+     # df_page remains the empty DataFrame initialized earlier
 
 
 # 6. Generate HTML for the fetched page.
 print("Generating HTML for table...")
-header_html, rows_html = generate_table_html_for_page(df_page)
-if is_state_filter_active: # Log generated HTML specifically for state filter
+header_html, rows_html = generate_table_html_for_page(df_page) # df_page can be empty here
+
+# --- Move debug logging check here, after HTML generation ---
+# Log generated HTML specifically for state filter, only if df_page *was not* empty
+if is_state_filter_active and not df_page.is_empty():
     print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
+elif is_state_filter_active and df_page.is_empty():
+    print(f"DEBUG: State filter active, generated 'no results' HTML row.")
 
 
 # 7. Prepare the data payload to send *to* the component for this render.
