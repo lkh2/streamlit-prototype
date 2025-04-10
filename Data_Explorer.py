@@ -1835,49 +1835,53 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 # --- Main App Logic ---
 
 # 1. Prepare default state and potentially retrieve the last state sent from the component
-# Use a default dictionary structure matching what JS sends
+# Use a default dictionary structure matching what JS sends and session state init
 default_state = {
-    "page": st.session_state.current_page,
-    "filters": st.session_state.filters,
-    "sort_order": st.session_state.sort_order
+    "page": 1, # Sensible default page
+    "filters": { # Default filters matching session state init
+        'search': '',
+        'categories': ['All Categories'],
+        'subcategories': ['All Subcategories'],
+        'countries': ['All Countries'],
+        'states': ['All States'],
+        'date': 'All Time',
+        'ranges': {
+            'pledged': {'min': min_pledged, 'max': max_pledged},
+            'goal': {'min': min_goal, 'max': max_goal},
+            'raised': {'min': min_raised, 'max': max_raised}
+        }
+    },
+    "sort_order": 'popularity' # Default sort matching session state init
 }
-# This variable will hold the state *sent from* the component on the *previous* run,
-# or default_state on the first run or if the component didn't send anything.
+
+# Get the value sent by the component *last time*, default if nothing sent yet
 component_value = st.session_state.get("kickstarter_state_value", default_state)
-
-# Store previous state for comparison
-previous_page = st.session_state.current_page
-previous_filters = st.session_state.filters
-previous_sort = st.session_state.sort_order
-
-# 2. Update Streamlit session state based on the component value *from the previous run*
-#    Always try to update, as the component is the source of truth for interaction changes.
-st.session_state.current_page = component_value.get("page", st.session_state.current_page)
-st.session_state.filters = component_value.get("filters", st.session_state.filters)
-st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
-
-# Check if the state *actually* changed due to the component value
-# Use json.dumps for reliable comparison of potentially nested dicts in filters
-state_changed = (
-    st.session_state.current_page != previous_page or
-    json.dumps(st.session_state.filters, sort_keys=True) != json.dumps(previous_filters, sort_keys=True) or
-    st.session_state.sort_order != previous_sort
-)
-
-# 3. If the state relevant for fetching data changed based on the component interaction, rerun immediately.
-#    The *next* run will then use the correct, updated session state from the start.
-if state_changed:
-    print("State changed based on component value, triggering rerun.")
-    # No need to explicitly store component_value back here, session state is already updated
-    st.rerun()
-
-# --- Code from here only executes if state didn't change OR after the st.rerun ---
-print("Proceeding with script execution (either initial load or after rerun)")
+print(f"Received component value from previous run: {json.dumps(component_value)}") # Log received value
 
 
-# 4. Apply filters and sorting to the base LazyFrame (using potentially updated session state)
+# 2. Update Streamlit session state *based on the value received from the component*
+# This ensures that user interactions drive the state for the current run.
+# Use .get() with fallbacks to the current session state values if component_value is incomplete
+# Use default_state values as final fallback for robustness on first run or errors
+st.session_state.current_page = component_value.get("page", st.session_state.get('current_page', default_state['page']))
+st.session_state.filters = component_value.get("filters", st.session_state.get('filters', default_state['filters']))
+st.session_state.sort_order = component_value.get("sort_order", st.session_state.get('sort_order', default_state['sort_order']))
+
+# --- REMOVED RERUN LOGIC ---
+# The comparison and st.rerun() based on state_changed are removed.
+# We directly proceed to use the potentially updated session state below.
+print("Proceeding with script execution using potentially updated state")
+print(f"Current Page: {st.session_state.current_page}, Filters: {json.dumps(st.session_state.filters)}, Sort: {st.session_state.sort_order}")
+
+
+# 4. Apply filters and sorting to the base LazyFrame (using updated session state)
 print(f"Applying filters: {st.session_state.filters}")
 print(f"Applying sort: {st.session_state.sort_order}")
+# Ensure base_lf exists
+if 'base_lf' not in st.session_state:
+     st.error("Base LazyFrame not found in session state. Please reload the application or check data source.")
+     st.stop()
+
 filtered_lf = apply_filters_and_sort(
     st.session_state.base_lf,
     st.session_state.filters,
@@ -1888,8 +1892,8 @@ filtered_lf = apply_filters_and_sort(
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    # Use pl.len() instead of pl.count()
-    total_rows_result = filtered_lf.select(pl.len()).collect()
+    # Use pl.len() instead of pl.count() and stream collection
+    total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
@@ -1900,16 +1904,18 @@ except Exception as e:
 # 6. Calculate pagination details
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
 # Clamp page number *after* potential update and *before* fetching data
+# Ensure page is valid even if total_rows is 0 or total_pages is 0
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
 # 7. Fetch *only* the data for the current page
 df_page = pl.DataFrame() # Default to empty DF
-if st.session_state.total_rows > 0 and offset < st.session_state.total_rows : # Add check offset is valid
+# Check if fetching is needed and possible
+if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming")
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True) # Use streaming collect
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
     except Exception as e:
@@ -1918,10 +1924,11 @@ if st.session_state.total_rows > 0 and offset < st.session_state.total_rows : # 
 else:
     if st.session_state.total_rows == 0:
          print("No rows match filters, skipping page fetch.")
-    else:
-         print(f"Calculated offset {offset} is out of bounds for total rows {st.session_state.total_rows}. Resetting page?")
-         # This case might happen if filters change drastically. Resetting to page 1 might be desired.
-         # For now, we just fetch nothing by keeping df_page empty.
+    elif PAGE_SIZE <= 0:
+         print("PAGE_SIZE is zero or negative, skipping page fetch.")
+    else: # Offset out of bounds
+         print(f"Calculated offset {offset} is out of bounds for total rows {st.session_state.total_rows}. Displaying empty page.")
+         # Fetching nothing by keeping df_page empty is correct here.
 
 
 # 8. Generate HTML for the fetched page
@@ -1933,8 +1940,8 @@ component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
     "total_rows": st.session_state.total_rows,
-    "filters": st.session_state.filters, # Send the current filters
-    "sort_order": st.session_state.sort_order, # Send the current sort order
+    "filters": st.session_state.filters, # Send the *current* filters used for this render
+    "sort_order": st.session_state.sort_order, # Send the *current* sort order
     "header_html": header_html,
     "rows_html": rows_html,
     # Pass necessary options/metadata for UI rendering
@@ -1951,6 +1958,13 @@ print("Rendering component...")
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # The single key for this component instance
-    default=default_state # Default value if component hasn't sent anything yet
+    default=default_state # Default value if component hasn't sent anything yet (first run)
 )
-st.session_state.kickstarter_state_value = component_return_value # Store the received value for the next run
+
+# Store the *raw* value received from the component for the next run's Step 1
+st.session_state.kickstarter_state_value = component_return_value
+print(f"Stored component return value for next run: {json.dumps(component_return_value)}") # Log stored value
+
+# Optional: Add a small footer to show the current state for debugging
+# st.markdown("---")
+# st.caption(f"Debug Info: Page {st.session_state.current_page}, Date Filter: {st.session_state.filters.get('date', 'N/A')}, Sort: {st.session_state.sort_order}, Total Rows: {st.session_state.total_rows}")
