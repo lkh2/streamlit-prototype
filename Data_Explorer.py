@@ -945,7 +945,17 @@ css = """
         font-size: 1.2em;
         color: #555;
     }
-    .hidden { display: none; }
+    .hidden { 
+        display: none; 
+    }
+
+    .category-option.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        pointer-events: none; /* Prevent clicks */
+        background-color: #f8f8f8 !important; /* Override hover effects */
+        color: #999 !important;
+    }
 </style>
 """
 
@@ -1182,7 +1192,7 @@ class TableManager {
             this.selectedCategories,
             'All Categories',
             this.categoryBtn,
-            true
+            'category'
         );
         this.updateSubcategoryOptions();
         this.setupMultiSelect(
@@ -1234,7 +1244,7 @@ class TableManager {
             this.selectedCategories,
             'All Categories',
             this.categoryBtn,
-            true
+            'category'
         );
         this.setupMultiSelect(
             document.querySelectorAll('#countryOptionsContainer .country-option'),
@@ -1283,7 +1293,7 @@ class TableManager {
     }
 
     updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
-         if (!options || options.length === 0 || !selectedSet) return;
+         if (!options || options.length === 0 || !selectedSet || !buttonElement) return;
          options.forEach(option => {
             const isSelected = selectedSet.has(option.dataset.value);
             option.classList.toggle('selected', isSelected);
@@ -1471,13 +1481,13 @@ class TableManager {
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
         this.setupMultiSelect(
-            document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn, true
+            document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn, 'category'
         );
         this.setupMultiSelect(
-            document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn
+            document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn, 'country'
         );
         this.setupMultiSelect(
-             document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn
+             document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn, 'state'
          );
 
         if (defaultFilters.ranges && this.rangeSliderElements) {
@@ -1535,8 +1545,8 @@ class TableManager {
          }
     }
 
-    setupMultiSelect(options, selectedSet, allValue, buttonElement, triggerSubcategoryUpdate = false) {
-        if (!options || options.length === 0 || !selectedSet) return;
+    setupMultiSelect(options, selectedSet, allValue, buttonElement, typeIdentifier) {
+        if (!options || options.length === 0 || !selectedSet || !buttonElement) return;
 
         options.forEach(option => {
             const newOption = option.cloneNode(true);
@@ -1549,6 +1559,11 @@ class TableManager {
              }
 
              newOption.addEventListener('click', (e) => {
+                if (typeIdentifier === 'category' && e.target.classList.contains('disabled')) {
+                    console.log("Category selection disabled.");
+                    return;
+                }
+
                 const clickedValue = e.target.dataset.value;
                 const isCurrentlySelected = e.target.classList.contains('selected');
                 const currentOptions = e.target.parentElement.querySelectorAll('[data-value]');
@@ -1573,7 +1588,7 @@ class TableManager {
                     }
 
                     const anySpecificSelected = Array.from(selectedSet).some(item => item !== allValue);
-                    if (!anySpecificSelected) {
+                    if (!anySpecificSelected && selectedSet.size === 0) {
                          selectedSet.clear();
                          selectedSet.add(allValue);
                          if (currentAllOption) currentAllOption.classList.add('selected');
@@ -1585,8 +1600,10 @@ class TableManager {
 
                 this.updateButtonText(selectedSet, buttonElement, allValue);
 
-                if (triggerSubcategoryUpdate) {
+                if (typeIdentifier === 'category') {
                     this.updateSubcategoryOptions();
+                } else if (typeIdentifier === 'subcategory') {
+                    this.updateCategoryInteractionState();
                 }
 
                 this.currentPage = 1;
@@ -1603,7 +1620,10 @@ class TableManager {
         const subcategoryMap = this.categorySubcategoryMap || {};
         const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
         const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories) return;
+        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories) {
+            console.error("Missing elements for subcategory update:", subcategoryOptionsContainer, subcategoryBtn, this.selectedSubcategories);
+            return;
+        }
 
         let isAllCategoriesSelected = selectedCategories.has('All Categories');
         let availableSubcategories = new Set();
@@ -1629,19 +1649,26 @@ class TableManager {
         });
 
         const availableSubSet = new Set(sortedSubcategories);
-        let resetSelection = false;
-        for (const subcat of this.selectedSubcategories) {
+        let selectionChanged = false;
+        const currentSelectedSubcategories = Array.from(this.selectedSubcategories);
+
+        for (const subcat of currentSelectedSubcategories) {
             if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
-                resetSelection = true;
-                break;
+                this.selectedSubcategories.delete(subcat);
+                selectionChanged = true;
             }
         }
 
-        if (resetSelection || this.selectedSubcategories.size === 0 || isAllCategoriesSelected) {
-            this.selectedSubcategories.clear();
-            this.selectedSubcategories.add('All Subcategories');
-        }
+        const hasSpecificSelected = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
+        if (selectionChanged || this.selectedSubcategories.size === 0 || (!hasSpecificSelected && sortedSubcategories.length > 1) ) {
+            const onlyAllSubcatsAvailable = sortedSubcategories.length <= 1 && sortedSubcategories[0] === 'All Subcategories';
 
+            if (!onlyAllSubcatsAvailable || this.selectedSubcategories.size === 0) {
+                this.selectedSubcategories.clear();
+                this.selectedSubcategories.add('All Subcategories');
+                selectionChanged = true;
+            }
+        }
 
         subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
             `<div class="subcategory-option ${this.selectedSubcategories.has(opt) ? 'selected' : ''}" data-value="${opt}">${opt}</div>`
@@ -1653,8 +1680,38 @@ class TableManager {
              subcategoryOptionsContainer.querySelectorAll('.subcategory-option'),
              this.selectedSubcategories,
              'All Subcategories',
-             this.subcategoryBtn
+             subcategoryBtn,
+             'subcategory'
          );
+
+         if (selectionChanged) {
+            this.updateCategoryInteractionState();
+         }
+    }
+
+    updateCategoryInteractionState() {
+        const categoryOptions = document.querySelectorAll('#categoryOptionsContainer .category-option');
+        if (!categoryOptions || categoryOptions.length === 0 || !this.selectedSubcategories) return;
+
+        const hasSpecificSubcategory = Array.from(this.selectedSubcategories).some(sub => sub !== 'All Subcategories');
+
+        if (hasSpecificSubcategory) {
+            categoryOptions.forEach(option => {
+                option.classList.add('disabled');
+            });
+        } else {
+            categoryOptions.forEach(option => {
+                option.classList.remove('disabled');
+            });
+        }
+
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'),
+            this.selectedCategories,
+            'All Categories',
+            this.categoryBtn,
+            'category'
+        );
     }
 
     setupRangeSlider() {
