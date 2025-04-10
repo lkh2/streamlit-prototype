@@ -1499,54 +1499,32 @@ class TableManager {
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-        // Reset internal state representation
+        // Reset internal JS state FIRST
+        this.currentPage = defaultPage;
+        this.currentSort = defaultSort;
+        // Use a deep copy to avoid accidental mutation later
+        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
         this.selectedCategories = new Set(defaultFilters.categories);
         this.selectedSubcategories = new Set(defaultFilters.subcategories);
         this.selectedCountries = new Set(defaultFilters.countries);
         this.selectedStates = new Set(defaultFilters.states);
 
-        // Reset UI elements explicitly
-        this.searchInput.value = defaultFilters.search;
-        document.getElementById('sortFilter').value = defaultSort;
-        document.getElementById('dateFilter').value = defaultFilters.date;
+        // Show loading indicator immediately
+        this.showLoading(true);
 
-        // Reset range sliders using the defaults determined above
-        if (this.rangeSliderElements) {
-            const { fromSlider, toSlider, fromInput, toInput, fillSlider,
-                    goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                    raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput } = this.rangeSliderElements;
-            const ranges = defaultFilters.ranges;
-             // Add checks for elements before accessing properties/calling functions
-             if (fromSlider && toSlider && fromInput && toInput && fillSlider) {
-                 fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
-                 fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
-                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-             }
-             if (goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
-                 goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
-                 goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
-                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-             }
-             if (raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
-                 raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
-                 raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
-                 fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
-             }
-        }
+        // Construct the state object to send to Python, using the internally reset values
+        const resetStatePayload = {
+            page: this.currentPage,
+            filters: this.currentFilters,
+            sort_order: this.currentSort
+        };
+        console.log("Resetting state. Sending payload to Python:", resetStatePayload);
+        Streamlit.setComponentValue(resetStatePayload);
 
-        // Reset multi-select UI
-        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions(); // Regenerate subcategories for 'All Categories'
-        // Note: updateSubcategoryOptions already calls setupMultiSelect for subcats
-        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
-        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
-
-        // Set state and request update
-        this.currentPage = defaultPage;
-        this.currentSort = defaultSort;
-        // Manually set currentFilters to defaults before requesting update
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); // Deep copy
-        this.requestUpdate(); // Will gather the reset state from UI
+        // --- REMOVED --- Explicit UI element updates are removed from here.
+        // The UI will be updated visually when Python sends back the
+        // reset data via the onRender -> updateUIState flow.
+        // --- REMOVED --- this.requestUpdate();
     }
 
 
