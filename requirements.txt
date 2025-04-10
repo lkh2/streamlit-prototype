@@ -1,4 +1,2 @@
 polars
-psutil
 streamlit
-streamlit_js_eval

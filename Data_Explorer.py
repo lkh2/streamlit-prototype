@@ -1,4 +1,3 @@
-import time
 import streamlit as st
 import streamlit.components.v1 as components
 import tempfile, os
@@ -32,12 +31,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
-# --- Component Generation (Simplified) ---
-# We will pass data directly to the component instance now
-# No need for the complex closure structure if we aren't dynamically generating JS
-# based on data *within* the component generation itself.
-# Let's keep generate_component for now, but note its role changes.
+# --- Component Generation ---
 def generate_component(name, template="", script=""):
     dir = f"{tempfile.gettempdir()}/{name}"
     if not os.path.isdir(dir): os.mkdir(dir)
@@ -96,7 +90,6 @@ def generate_component(name, template="", script=""):
 
     _component_func = components.declare_component(name, path=str(dir))
 
-    # Modify wrapper slightly if needed, but primary change is in the main script logic
     def component_wrapper(component_data, key=None, default=None):
         component_value = _component_func(component_data=component_data, key=key, default=default)
         return component_value
@@ -107,7 +100,6 @@ def generate_component(name, template="", script=""):
 parquet_source_path = "data.parquet"
 filter_metadata_path = "filter_metadata.json"
 
-# Default structure (remains the same)
 filter_options = {
     'categories': ['All Categories'],
     'countries': ['All Countries'],
@@ -124,7 +116,6 @@ min_max_values = {
     'raised': {'min': 0, 'max': 500}
 }
 
-# Load metadata (remains largely the same, maybe add more robust defaults)
 if not os.path.exists(filter_metadata_path):
     st.error(f"Filter metadata file not found at '{filter_metadata_path}'. Please run `database_download.py` first.")
     st.stop()
@@ -133,21 +124,17 @@ else:
         with open(filter_metadata_path, 'r', encoding='utf-8') as f:
             loaded_metadata = json.load(f)
 
-        # Validate and load categories, countries, states
         filter_options['categories'] = loaded_metadata.get('categories') or ['All Categories']
         filter_options['countries'] = loaded_metadata.get('countries') or ['All Countries']
         filter_options['states'] = loaded_metadata.get('states') or ['All States']
-        filter_options['date_ranges'] = loaded_metadata.get('date_ranges', filter_options['date_ranges']) # Load if present, else keep default
+        filter_options['date_ranges'] = loaded_metadata.get('date_ranges', filter_options['date_ranges'])
 
-        # Load category-subcategory map
         category_subcategory_map = loaded_metadata.get('category_subcategory_map', {'All Categories': ['All Subcategories']})
-        # Ensure 'All Categories' entry exists and has 'All Subcategories'
         if 'All Categories' not in category_subcategory_map:
             category_subcategory_map['All Categories'] = ['All Subcategories']
         if category_subcategory_map['All Categories'] and 'All Subcategories' not in category_subcategory_map['All Categories']:
              category_subcategory_map['All Categories'].insert(0, 'All Subcategories')
 
-        # Add all unique subcategories to 'All Categories' list if not already present
         all_subs = set(loaded_metadata.get('subcategories', ['All Subcategories']))
         all_cats_subs = set(category_subcategory_map.get('All Categories', []))
         missing_subs = all_subs - all_cats_subs
@@ -155,21 +142,16 @@ else:
              category_subcategory_map['All Categories'].extend(sorted(list(missing_subs)))
              category_subcategory_map['All Categories'] = sorted(list(set(category_subcategory_map['All Categories'])), key=lambda x: (x != 'All Subcategories', x))
 
-
-        # Load min/max values, keeping defaults if keys are missing
         loaded_min_max = loaded_metadata.get('min_max_values', {})
         min_max_values['pledged'] = loaded_min_max.get('pledged', min_max_values['pledged'])
         min_max_values['goal'] = loaded_min_max.get('goal', min_max_values['goal'])
         min_max_values['raised'] = loaded_min_max.get('raised', min_max_values['raised'])
-
-        print("Filter metadata loaded successfully.")
 
     except json.JSONDecodeError:
         st.error(f"Error decoding JSON from '{filter_metadata_path}'. File might be corrupted. Using default filters.")
     except Exception as e:
         st.error(f"Error loading filter metadata from '{filter_metadata_path}': {e}. Using default filters.")
 
-# Extract min/max for convenience
 min_pledged = min_max_values['pledged']['min']
 max_pledged = min_max_values['pledged']['max']
 min_goal = min_max_values['goal']['min']
@@ -200,19 +182,16 @@ DEFAULT_COMPONENT_STATE = {
 
 # --- Initialize Session State ---
 if 'filters' not in st.session_state:
-    st.session_state.filters = DEFAULT_FILTERS.copy() # Use copy
+    st.session_state.filters = DEFAULT_FILTERS.copy()
 if 'sort_order' not in st.session_state:
     st.session_state.sort_order = DEFAULT_COMPONENT_STATE['sort_order']
 if 'current_page' not in st.session_state:
     st.session_state.current_page = DEFAULT_COMPONENT_STATE['page']
 if 'total_rows' not in st.session_state:
-    st.session_state.total_rows = 0 # Will be calculated
-# Initialize the state holder for the component's return value
+    st.session_state.total_rows = 0
 if 'kickstarter_state_value' not in st.session_state:
-    st.session_state.kickstarter_state_value = None # Start as None, indicates nothing received yet
-# Initialize the state holder for what we *sent* last time
+    st.session_state.kickstarter_state_value = None
 if 'state_sent_to_component' not in st.session_state:
-    # Initialize with defaults so the first comparison works
     st.session_state.state_sent_to_component = DEFAULT_COMPONENT_STATE.copy()
 
 
@@ -223,76 +202,55 @@ if 'base_lf' not in st.session_state:
         st.stop()
 
     try:
-        print(f"Scanning Parquet source: {parquet_source_path}")
         base_lf = pl.scan_parquet(parquet_source_path)
-
-        print("Base LazyFrame created.")
         st.session_state.base_lf = base_lf
-        # Initial schema check
         schema = st.session_state.base_lf.collect_schema()
-        print("Schema:", schema)
-        if len(schema) == 0: # Check if schema has columns
+        if len(schema) == 0:
              st.error(f"Loaded data from '{parquet_source_path}' has no columns.")
              st.stop()
-        # Check for duplicate column names explicitly
         if len(schema.names()) != len(set(schema.names())):
              st.error(f"Parquet source '{parquet_source_path}' contains duplicate column names. Please clean the source data.")
-             # You might want to print the duplicate names here for debugging
              from collections import Counter
              counts = Counter(schema.names())
              duplicates = [name for name, count in counts.items() if count > 1]
              st.error(f"Duplicate columns found: {duplicates}")
              st.stop()
 
-
     except Exception as e:
         st.error(f"Error scanning Parquet or initial processing: {e}")
-        # Provide more context if available
         if hasattr(e, 'context'):
             st.error(f"Context: {e.context()}")
         st.stop()
 
 # --- Filtering and Sorting Logic ---
 def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> pl.LazyFrame:
-    """Applies filters and sorting to a LazyFrame."""
-    # Get column names once to avoid repeated schema resolution
     column_names = lf.collect_schema().names()
 
-    # 1. Text Search (Apply across relevant text columns)
     search_term = filters.get('search', '')
     if search_term:
-        # Add columns you want to search here
         search_cols = ['Project Name', 'Creator', 'Category', 'Subcategory']
-        # Filter columns that actually exist in the frame
         valid_search_cols = [col for col in search_cols if col in column_names]
         if valid_search_cols:
             search_expr = None
             for col in valid_search_cols:
-                 # Case-insensitive contains
-                 # Ensure the column is Utf8 before applying string operations
                  current_expr = pl.col(col).cast(pl.Utf8).str.contains(f"(?i){search_term}")
                  if search_expr is None:
                      search_expr = current_expr
                  else:
-                     search_expr = search_expr | current_expr # OR condition
+                     search_expr = search_expr | current_expr
             if search_expr is not None:
                  lf = lf.filter(search_expr)
 
-    # 2. Categorical Filters
     if 'Category' in column_names and filters['categories'] != ['All Categories']:
         lf = lf.filter(pl.col('Category').is_in(filters['categories']))
     if 'Subcategory' in column_names and filters['subcategories'] != ['All Subcategories']:
-        # Handle potential interaction with category filter if needed, assuming independent for now
         lf = lf.filter(pl.col('Subcategory').is_in(filters['subcategories']))
     if 'Country' in column_names and filters['countries'] != ['All Countries']:
         lf = lf.filter(pl.col('Country').is_in(filters['countries']))
 
-    # State Filter - Now operates on the raw 'State' column
     if 'State' in column_names and filters['states'] != ['All States']:
-        # Filter using the raw state values, case-insensitively
         lf = lf.filter(pl.col('State').cast(pl.Utf8).str.to_lowercase().is_in([s.lower() for s in filters['states']]))
 
-    # 3. Range Filters
     ranges = filters.get('ranges', {})
     if 'Raw Pledged' in column_names and 'pledged' in ranges:
         min_p, max_p = ranges['pledged']['min'], ranges['pledged']['max']
@@ -302,21 +260,17 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         lf = lf.filter((pl.col('Raw Goal') >= min_g) & (pl.col('Raw Goal') <= max_g))
     if 'Raw Raised' in column_names and 'raised' in ranges:
         min_r, max_r = ranges['raised']['min'], ranges['raised']['max']
-        # Handle division by zero for goal if necessary for percentage calculation
-        # Ensure 'Raw Raised' column exists and represents the percentage directly, or calculate it
-        # Assuming 'Raw Raised' IS the percentage already calculated during data processing
         lf = lf.filter((pl.col('Raw Raised') >= min_r) & (pl.col('Raw Raised') <= max_r))
 
 
-    # 4. Date Filter
     date_filter = filters.get('date', 'All Time')
     if date_filter != 'All Time' and 'Raw Date' in column_names:
         now = datetime.datetime.now()
         compare_date = None
         if date_filter == 'Last Month':
-            compare_date = now - datetime.timedelta(days=30) # Approximation
+            compare_date = now - datetime.timedelta(days=30)
         elif date_filter == 'Last 6 Months':
-            compare_date = now - datetime.timedelta(days=182) # Approximation
+            compare_date = now - datetime.timedelta(days=182)
         elif date_filter == 'Last Year':
             compare_date = now - datetime.timedelta(days=365)
         elif date_filter == 'Last 5 Years':
@@ -325,15 +279,11 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
             compare_date = now - datetime.timedelta(days=10*365)
 
         if compare_date:
-             # Ensure Raw Date is datetime type before comparison
-             # Use try_cast for robustness if dates might be invalid
              lf = lf.with_columns(pl.col("Raw Date").cast(pl.Datetime, strict=False).alias("Raw Date_dt"))
              lf = lf.filter(pl.col('Raw Date_dt') >= compare_date).drop("Raw Date_dt")
 
-
-    # 5. Sorting
     sort_descending = True
-    sort_col = 'Popularity Score' # Default for 'popularity'
+    sort_col = 'Popularity Score'
 
     if sort_order == 'newest':
         sort_col = 'Raw Date'
@@ -349,51 +299,38 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         sort_descending = True
     elif sort_order == 'enddate':
         sort_col = 'Raw Deadline'
-        sort_descending = True # Assuming latest ending first
+        sort_descending = True
 
     if sort_col in column_names:
         lf = lf.sort(sort_col, descending=sort_descending, nulls_last=True)
     else:
         print(f"Warning: Sort column '{sort_col}' not found in LazyFrame.")
 
-
     return lf
 
 # --- Generate HTML for the *current page* data ---
 def generate_table_html_for_page(df_page: pl.DataFrame):
-    # Define visible columns *before* checking if df_page is empty
     visible_columns = ['Project Name', 'Creator', 'Pledged Amount', 'Link', 'Country', 'State']
     header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
 
-    # Check if the DataFrame is empty *or* if essential columns are missing
-    # This handles the case where the DataFrame is empty OR has unexpected structure
     if df_page.is_empty():
         colspan = len(visible_columns) if visible_columns else 1
         return header_html, f'<tr><td colspan="{colspan}">No projects match the current filters.</td></tr>'
 
-    # --- Moved Column Check: Only check if df_page is NOT empty ---
     required_data_cols = [
         'Category', 'Subcategory', 'Raw Pledged', 'Raw Goal', 'Raw Raised',
         'Raw Date', 'Raw Deadline', 'Backer Count', 'Popularity Score'
     ]
-    # Also need the visible columns and the raw 'State' column for styling
     all_needed_cols = list(set(visible_columns + required_data_cols + ['State']))
 
     missing_cols = [col for col in all_needed_cols if col not in df_page.columns]
     if missing_cols:
         st.error(f"FATAL: Missing required columns in fetched data page: {missing_cols}. Check base Parquet schema and processing.")
         colspan = len(visible_columns) if visible_columns else 1
-        # Ensure visible_columns only contains existing columns before generating header for error message
-        header_html_error = ''.join(f'<th scope="col">{col}</th>' for col in visible_columns if col in df_page.columns) # Use available cols for error header
+        header_html_error = ''.join(f'<th scope="col">{col}</th>' for col in visible_columns if col in df_page.columns)
         return header_html_error, f'<tr><td colspan="{colspan}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
-    # --- End Moved Column Check ---
-
 
     rows_html = ''
-
-    # --- Removed redundant empty check, covered above ---
-    # if df_page.is_empty():
-    #     return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
 
     try:
         data_dicts = df_page.to_dicts()
@@ -402,17 +339,11 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
         return header_html, f'<tr><td colspan="{len(visible_columns)}">Error rendering rows.</td></tr>'
 
     for row in data_dicts:
-        # Apply State styling here using the raw 'State' value
-        state_value = row.get('State') # Get original state value (might be None)
+        state_value = row.get('State')
         state_value_str = str(state_value) if state_value is not None else 'unknown'
-        # Create a CSS-friendly class name (lowercase, replace space with hyphen)
         state_class = state_value_str.lower().replace(' ', '-') if state_value_str != 'unknown' else 'unknown'
-        # Ensure html escaping for the displayed text inside the div
         styled_state_html = f'<div class="state_cell state-{html.escape(state_class)}">{html.escape(state_value_str)}</div>' if state_value is not None else '<div class="state_cell state-unknown">unknown</div>'
 
-
-        # Data attributes for potential client-side use (though filtering is server-side)
-        # Ensure dates are formatted correctly if not None
         raw_date = row.get('Raw Date')
         raw_deadline = row.get('Raw Deadline')
         raw_date_str = raw_date.strftime('%Y-%m-%d') if raw_date else 'N/A'
@@ -430,28 +361,25 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
         '''
         visible_cells = ''
         for col in visible_columns:
-            value = row.get(col) # Get value, might be None
+            value = row.get(col)
 
             if col == 'Link':
                 url = str(value) if value else '#'
                 display_url = url if len(url) < 60 else url[:57] + '...'
-                # Escape URL components for safety
                 visible_cells += f'<td><a href="{html.escape(url)}" target="_blank" title="{html.escape(url)}">{html.escape(display_url)}</a></td>'
             elif col == 'Pledged Amount':
                  raw_pledged_val = row.get('Raw Pledged')
                  formatted_value = 'N/A'
                  if raw_pledged_val is not None:
                      try:
-                         # Ensure it's treated as float first for consistency
                          amount = int(float(raw_pledged_val))
                          formatted_value = f"${amount:,}"
                      except (ValueError, TypeError):
-                         pass # Keep N/A if conversion fails
+                         pass
                  visible_cells += f'<td>{html.escape(formatted_value)}</td>'
             elif col == 'State':
-                 visible_cells += f'<td>{styled_state_html}</td>' # Use the styled HTML generated above
+                 visible_cells += f'<td>{styled_state_html}</td>'
             else:
-                # Handle potential None values before converting to string and escaping
                 display_value = str(value) if value is not None else 'N/A'
                 visible_cells += f'<td>{html.escape(display_value)}</td>'
 
@@ -461,7 +389,6 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
 
 
 # --- Define Component ---
-# Load CSS and JS script strings (Keep these as they are for now)
 css = """
 <style>
     .title-wrapper {
@@ -509,7 +436,6 @@ css = """
         table-layout: fixed;
     }
 
-    /* Column width specifications */
     th[scope="col"]:nth-child(1) { width: 25%; }
     th[scope="col"]:nth-child(2) { width: 12.5%; }
     th[scope="col"]:nth-child(3) { width: 120px; }
@@ -774,7 +700,6 @@ css = """
         color: grey
     }
 
-    /* Range Slider Styles */
     .range-dropdown {
         position: relative;
         display: inline-block;
@@ -998,9 +923,17 @@ css = """
         padding-bottom: 12px;
     }
 
-    body { font-family: 'Poppins', sans-serif; margin: 0; padding: 20px; box-sizing: border-box; }
-    #component-root { width: 100%; }
-    /* Add a loading indicator style */
+    body { 
+        font-family: 'Poppins', 
+        sans-serif; margin: 0; 
+        padding: 20px; 
+        box-sizing: border-box; 
+    }
+
+    #component-root { 
+        width: 100%; 
+    }
+
     .loading-overlay {
         position: absolute;
         top: 0; left: 0; right: 0; bottom: 0;
@@ -1031,14 +964,12 @@ function debounce(func, wait) {
 
 class TableManager {
     constructor(initialData) {
-        console.log("TableManager initializing with:", initialData);
         this.componentRoot = document.getElementById('component-root');
         if (!this.componentRoot) {
             console.error("Component root element not found!");
             return;
         }
 
-        // Initial state from Streamlit
         this.currentPage = initialData.current_page || 1;
         this.pageSize = initialData.page_size || 10;
         this.totalRows = initialData.total_rows || 0;
@@ -1049,17 +980,14 @@ class TableManager {
         this.minMaxValues = initialData.min_max_values || {};
 
         this.renderHTMLStructure(initialData.header_html);
-        this.bindStaticElements(); // Bind elements that exist once after initial render
-        this.updateUIState(initialData); // Set initial values for filters etc.
-        this.updateTableContent(initialData.rows_html); // Populate initial table rows
-        this.updatePagination(); // Create initial pagination
-        this.adjustHeight(); // Adjust height after initial render
-
-        console.log("TableManager initialized.");
+        this.bindStaticElements();
+        this.updateUIState(initialData);
+        this.updateTableContent(initialData.rows_html);
+        this.updatePagination();
+        this.adjustHeight();
     }
 
     renderHTMLStructure(headerHtml) {
-        // Create the main structure once
         const minPledged = this.minMaxValues?.pledged?.min ?? 0;
         const maxPledged = this.minMaxValues?.pledged?.max ?? 1000;
         const minGoal = this.minMaxValues?.goal?.min ?? 0;
@@ -1213,40 +1141,32 @@ class TableManager {
     }
 
     bindStaticElements() {
-        // --- Search ---
         this.searchInput = document.getElementById('table-search');
         this.searchInput.addEventListener('input', debounce((e) => {
             this.currentFilters.search = e.target.value.trim();
-            this.currentPage = 1; // Reset to first page on new search
+            this.currentPage = 1;
             this.requestUpdate();
-        }, 500)); // Debounce search input
+        }, 500));
 
-        // --- Pagination ---
         document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
         document.getElementById('next-page').addEventListener('click', () => this.nextPage());
-        // Page number clicks are handled dynamically in updatePagination
 
-        // --- Reset ---
         document.getElementById('resetFilters').addEventListener('click', () => this.resetFilters());
 
-        // --- Sort ---
         document.getElementById('sortFilter').addEventListener('change', (e) => {
             this.currentSort = e.target.value;
-            this.currentPage = 1; // Reset to first page on sort change
+            this.currentPage = 1;
             this.requestUpdate();
         });
 
-        // --- Date Filter ---
         document.getElementById('dateFilter').addEventListener('change', (e) => {
              this.currentFilters.date = e.target.value;
              this.currentPage = 1;
              this.requestUpdate();
         });
 
-        // --- Range Sliders ---
-        this.setupRangeSlider(); // Sets up listeners for sliders/inputs
+        this.setupRangeSlider();
 
-        // --- Multi-Select Dropdowns ---
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
@@ -1262,10 +1182,10 @@ class TableManager {
             this.selectedCategories,
             'All Categories',
             this.categoryBtn,
-            true // Trigger subcategory update
+            true
         );
-        this.updateSubcategoryOptions(); // Initial population
-        this.setupMultiSelect( // Setup for subcategories *after* initial population
+        this.updateSubcategoryOptions();
+        this.setupMultiSelect(
              document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'),
              this.selectedSubcategories,
              'All Subcategories',
@@ -1286,91 +1206,73 @@ class TableManager {
     }
 
     updateUIState(data) {
-        // Update filter controls to reflect the current state received from Python
         this.currentPage = data.current_page;
         this.totalRows = data.total_rows;
         this.currentFilters = data.filters;
         this.currentSort = data.sort_order;
 
-        // -- Update Search Input --
         if (this.searchInput) this.searchInput.value = this.currentFilters.search || '';
 
-        // -- Update Sort Dropdown --
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = this.currentSort;
 
-         // -- Update Date Dropdown --
          const dateSelect = document.getElementById('dateFilter');
          if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
-        // -- Update Multi-Selects --
-        // Update the internal sets first
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
-        // Update the visual UI (selected classes and button text)
         this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories AND re-binds their listeners via setupMultiSelect inside it
+        this.updateSubcategoryOptions();
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
-        // --- ADDED: Re-bind listeners for Category, Country, State ---
-        // This ensures listeners are active even if updateUIState subtly changed the DOM or state management requires re-binding.
-        // Subcategories are handled within updateSubcategoryOptions.
         this.setupMultiSelect(
             document.querySelectorAll('#categoryOptionsContainer .category-option'),
             this.selectedCategories,
             'All Categories',
             this.categoryBtn,
-            true // Keep triggerSubcategoryUpdate = true for categories
+            true
         );
         this.setupMultiSelect(
             document.querySelectorAll('#countryOptionsContainer .country-option'),
             this.selectedCountries,
             'All Countries',
             this.countryBtn
-            // No trigger needed
         );
          this.setupMultiSelect(
              document.querySelectorAll('#stateOptionsContainer .state-option'),
              this.selectedStates,
              'All States',
              this.stateBtn
-             // No trigger needed
          );
-        // --- END ADDED SECTION ---
 
-
-        // -- Update Range Sliders --
         if (this.currentFilters.ranges && this.rangeSliderElements) {
              const { ranges } = this.currentFilters;
              const {
                  fromSlider, toSlider, fromInput, toInput,
                  goalFromSlider, goalToSlider, goalFromInput, goalToInput,
                  raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                 fillSlider // Function to update slider background
+                 fillSlider
              } = this.rangeSliderElements;
 
-             // Pledged
-             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) { // Add checks
+             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
                  fromSlider.value = ranges.pledged.min;
                  toSlider.value = ranges.pledged.max;
                  fromInput.value = ranges.pledged.min;
                  toInput.value = ranges.pledged.max;
                  fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
              }
-             // Goal
-             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) { // Add checks
+             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
                  goalFromSlider.value = ranges.goal.min;
                  goalToSlider.value = ranges.goal.max;
                  goalFromInput.value = ranges.goal.min;
                  goalToInput.value = ranges.goal.max;
                  fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
              }
-             // Raised
-             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) { // Add checks
+             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
                   raisedFromSlider.value = ranges.raised.min;
                   raisedToSlider.value = ranges.raised.max;
                   raisedFromInput.value = ranges.raised.min;
@@ -1381,20 +1283,18 @@ class TableManager {
     }
 
     updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
-         if (!options || options.length === 0 || !selectedSet) return; // Add check for selectedSet
+         if (!options || options.length === 0 || !selectedSet) return;
          options.forEach(option => {
             const isSelected = selectedSet.has(option.dataset.value);
-            option.classList.toggle('selected', isSelected); // Use toggle for cleaner logic
+            option.classList.toggle('selected', isSelected);
          });
          this.updateButtonText(selectedSet, buttonElement, allValue);
     }
 
 
     requestUpdate() {
-        // Show loading indicator
         this.showLoading(true);
 
-        // Gather the current state from UI elements
         const state = {
             page: this.currentPage,
             filters: {
@@ -1412,7 +1312,6 @@ class TableManager {
             },
             sort_order: this.currentSort
         };
-        console.log("Requesting update with state:", state);
         Streamlit.setComponentValue(state);
     }
 
@@ -1421,52 +1320,32 @@ class TableManager {
          if (indicator) {
              indicator.classList.toggle('hidden', !isLoading);
          }
-         // Maybe also disable controls while loading
-         // Update: Let's NOT disable controls here, as it might interfere if
-         // the loading state gets stuck briefly. The overlay should be enough.
-         // const controls = this.componentRoot.querySelectorAll('button, input, select');
-         // controls.forEach(el => el.disabled = isLoading);
      }
 
 
     updateTableContent(rowsHtml) {
         const tbody = document.getElementById('table-body');
         if (tbody) {
-            console.log("Updating table body HTML. Received length:", rowsHtml?.length); // Log received HTML
-            tbody.innerHTML = rowsHtml || '<tr><td colspan="6">Loading data or no results...</td></tr>'; // Use colspan from header
+            tbody.innerHTML = rowsHtml || '<tr><td colspan="6">Loading data or no results...</td></tr>';
         }
-         // Hide loading indicator once table content is updated
          this.showLoading(false);
-         console.log("Loading indicator hidden.");
     }
 
     updatePagination() {
-        console.log("--- Entering updatePagination ---"); // Log entry
+        const currentTotalRows = parseInt(this.totalRows || 0, 10);
+        const currentPageSize = parseInt(this.pageSize || 10, 10);
 
-        // --- Explicitly parse numbers and log inputs ---
-        const currentTotalRows = parseInt(this.totalRows || 0, 10); // Default to 0 if undefined/null/NaN after parse
-        const currentPageSize = parseInt(this.pageSize || 10, 10); // Default to 10
-        console.log(`updatePagination: Using parsed totalRows=${currentTotalRows}, pageSize=${currentPageSize}`);
-
-        // --- Perform calculation and log intermediate ---
-        let calculatedPages = 1; // Default to 1 page
+        let calculatedPages = 1;
         if (currentPageSize > 0) {
              calculatedPages = Math.ceil(currentTotalRows / currentPageSize);
-             console.log(`updatePagination: Raw calculated pages (ceil(total/size)) = ${calculatedPages}`);
-        } else {
-             console.log(`updatePagination: Page size is 0 or invalid, defaulting to 1 page.`);
         }
 
-        // Ensure at least 1 page even if totalRows is 0
         const totalPages = Math.max(1, calculatedPages);
-        console.log(`updatePagination: Final totalPages (max(1, calculated)) = ${totalPages}`);
 
-
-        const pageNumbers = this.generatePageNumbers(totalPages); // Pass the final calculated totalPages
+        const pageNumbers = this.generatePageNumbers(totalPages);
         const container = document.getElementById('page-numbers');
         if (!container) {
-            console.error("Pagination container 'page-numbers' not found!"); // Add error log
-             console.log("--- Exiting updatePagination (Error) ---");
+            console.error("Pagination container 'page-numbers' not found!");
              return;
          }
 
@@ -1482,7 +1361,6 @@ class TableManager {
             return button.outerHTML;
         }).join('');
 
-        // Add event listener to the container for delegation
         if (!this.handlePageClick) {
              this.handlePageClick = (event) => {
                  if (event.target.classList.contains('page-number') && !event.target.disabled) {
@@ -1493,7 +1371,6 @@ class TableManager {
         container.removeEventListener('click', this.handlePageClick);
         container.addEventListener('click', this.handlePageClick);
 
-        // --- Get button elements AFTER generating HTML ---
         const prevButton = document.getElementById('prev-page');
         const nextButton = document.getElementById('next-page');
 
@@ -1507,12 +1384,9 @@ class TableManager {
         } else {
             console.error("Next page button not found!");
         }
-
-        console.log("--- Exiting updatePagination ---"); // Log exit
     }
 
     generatePageNumbers(totalPages) {
-        // Same logic as before
         let pages = [];
         if (totalPages <= 10) {
             pages = Array.from({length: totalPages}, (_, i) => i + 1);
@@ -1552,8 +1426,7 @@ class TableManager {
     }
 
     resetFilters() {
-        // Get default values directly from the component state defaults
-        const defaultFilters = window.tableManagerInstance?.minMaxValues // Use initial metadata if available
+        const defaultFilters = window.tableManagerInstance?.minMaxValues
             ? {
                 search: '',
                 categories: ['All Categories'],
@@ -1567,33 +1440,25 @@ class TableManager {
                     raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
                 }
             }
-            : this.currentFilters; // Fallback just in case
+            : this.currentFilters;
 
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-        // --- Create the state payload FIRST ---
          const resetStatePayload = {
              page: defaultPage,
-             filters: JSON.parse(JSON.stringify(defaultFilters)), // Use deep copy
+             filters: JSON.parse(JSON.stringify(defaultFilters)),
              sort_order: defaultSort
          };
-         console.log("Reset button clicked. Target state:", resetStatePayload);
 
-         // --- Proceed with reset ---
-        console.log("Resetting internal JS state and UI elements visually...");
-
-        // Reset internal JS state
         this.currentPage = defaultPage;
         this.currentSort = defaultSort;
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); // Deep copy again
+        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
         this.selectedCategories = new Set(defaultFilters.categories);
         this.selectedSubcategories = new Set(defaultFilters.subcategories);
         this.selectedCountries = new Set(defaultFilters.countries);
         this.selectedStates = new Set(defaultFilters.states);
 
-        // --- Explicit UI Update ---
-        // (Keep the UI update code as it was)
         if (this.searchInput) this.searchInput.value = defaultFilters.search;
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = defaultSort;
@@ -1637,44 +1502,31 @@ class TableManager {
                   fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
              }
         }
-        console.log("UI elements visually reset.");
-        // --- END UI Update code ---
-
-        // Show loading indicator
         this.showLoading(true);
-
-        // Send the reset state payload to Python
-        console.log("Resetting state. Sending payload to Python:", resetStatePayload);
         Streamlit.setComponentValue(resetStatePayload);
     }
 
 
     adjustHeight() {
-         // Use requestAnimationFrame for smoother adjustments
          requestAnimationFrame(() => {
             const root = this.componentRoot;
             if (!root) return;
-             // Calculate height based on rendered content
-             const totalHeight = root.scrollHeight + 50; // Use scrollHeight, add buffer
+             const totalHeight = root.scrollHeight + 50;
 
-             // Check if height changed significantly to avoid rapid updates
              if (!this.lastHeight || Math.abs(this.lastHeight - totalHeight) > 10) {
                  this.lastHeight = totalHeight;
                  Streamlit.setFrameHeight(totalHeight);
-                 console.log("Adjusting height to:", totalHeight);
              }
          });
     }
 
-    // --- Multi-Select Logic ---
     updateButtonText(selectedItems, buttonElement, allValueLabel) {
-         if (!buttonElement || !selectedItems) return; // Add check for selectedItems
+         if (!buttonElement || !selectedItems) return;
          const selectedArray = Array.from(selectedItems);
-         // Filter out the 'All' value *before* counting for display logic
          const displayItems = selectedArray.filter(item => item !== allValueLabel);
-         displayItems.sort((a, b) => a.localeCompare(b)); // Sort for consistent display
+         displayItems.sort((a, b) => a.localeCompare(b));
 
-         if (displayItems.length === 0) { // If only 'All' or nothing selected
+         if (displayItems.length === 0) {
              buttonElement.textContent = allValueLabel;
          } else if (displayItems.length > 2) {
              buttonElement.textContent = `${displayItems[0]}, ${displayItems[1]} +${displayItems.length - 2}`;
@@ -1684,45 +1536,35 @@ class TableManager {
     }
 
     setupMultiSelect(options, selectedSet, allValue, buttonElement, triggerSubcategoryUpdate = false) {
-        if (!options || options.length === 0 || !selectedSet) return; // Add check for selectedSet
-
-        // Use event delegation on the container for efficiency might be complex if structure changes often.
-        // Sticking to direct binding for now, assuming updateSubcategoryOptions replaces elements.
+        if (!options || options.length === 0 || !selectedSet) return;
 
         options.forEach(option => {
-            // Clean previous listeners by cloning - ensures no duplicate listeners
             const newOption = option.cloneNode(true);
             option.parentNode.replaceChild(newOption, option);
 
-             // Add selected class based on initial set
              if (selectedSet.has(newOption.dataset.value)) {
                  newOption.classList.add('selected');
              } else {
-                 newOption.classList.remove('selected'); // Ensure deselected state
+                 newOption.classList.remove('selected');
              }
 
              newOption.addEventListener('click', (e) => {
                 const clickedValue = e.target.dataset.value;
                 const isCurrentlySelected = e.target.classList.contains('selected');
-                // Get current options in the *specific dropdown* being clicked
                 const currentOptions = e.target.parentElement.querySelectorAll('[data-value]');
 
                 if (clickedValue === allValue) {
-                    // If 'All' is clicked, clear others, select 'All'
                     selectedSet.clear();
                     selectedSet.add(allValue);
                     currentOptions.forEach(opt => opt.classList.remove('selected'));
                     e.target.classList.add('selected');
                 } else {
-                    // If specific item clicked:
-                    // 1. Deselect 'All' if it was selected
                     const currentAllOption = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
                     if (currentAllOption && currentAllOption.classList.contains('selected')) {
                         selectedSet.delete(allValue);
                         currentAllOption.classList.remove('selected');
                     }
 
-                    // 2. Toggle the clicked item
                     e.target.classList.toggle('selected');
                     if (e.target.classList.contains('selected')) {
                         selectedSet.add(clickedValue);
@@ -1730,15 +1572,11 @@ class TableManager {
                         selectedSet.delete(clickedValue);
                     }
 
-                    // 3. If *nothing specific* is selected now, re-select 'All'
-                    // Check if any item *other than 'All'* is selected
                     const anySpecificSelected = Array.from(selectedSet).some(item => item !== allValue);
                     if (!anySpecificSelected) {
-                         // If only 'All' was selected and it got deselected above, or if empty set results
                          selectedSet.clear();
                          selectedSet.add(allValue);
                          if (currentAllOption) currentAllOption.classList.add('selected');
-                         // Ensure other items are deselected if we reverted to 'All'
                          currentOptions.forEach(opt => {
                               if(opt.dataset.value !== allValue) opt.classList.remove('selected');
                          });
@@ -1748,18 +1586,14 @@ class TableManager {
                 this.updateButtonText(selectedSet, buttonElement, allValue);
 
                 if (triggerSubcategoryUpdate) {
-                    // Before updating subcategories, ensure the main category set is correct
-                    // This happens naturally because we modified selectedSet above
-                    console.log("Triggering subcategory update. Categories:", Array.from(this.selectedCategories));
-                    this.updateSubcategoryOptions(); // This will re-render and re-bind subcats
+                    this.updateSubcategoryOptions();
                 }
 
-                this.currentPage = 1; // Reset page on filter change
+                this.currentPage = 1;
                 this.requestUpdate();
             });
         });
 
-        // Initial button text update
         this.updateButtonText(selectedSet, buttonElement, allValue);
     }
 
@@ -1769,19 +1603,17 @@ class TableManager {
         const subcategoryMap = this.categorySubcategoryMap || {};
         const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
         const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories) return; // Add checks
+        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories) return;
 
         let isAllCategoriesSelected = selectedCategories.has('All Categories');
         let availableSubcategories = new Set();
 
         if (isAllCategoriesSelected || selectedCategories.size === 0) {
-             // Use the pre-calculated 'All Categories' list from metadata
              (subcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
         } else {
-             availableSubcategories.add('All Subcategories'); // Always include 'All Subcategories' option
+             availableSubcategories.add('All Subcategories');
              selectedCategories.forEach(cat => {
                  (subcategoryMap[cat] || []).forEach(subcat => {
-                      // Don't add 'All Subcategories' from individual lists if specific cats selected
                       if (subcat !== 'All Subcategories') {
                          availableSubcategories.add(subcat);
                       }
@@ -1790,17 +1622,14 @@ class TableManager {
         }
 
         const sortedSubcategories = Array.from(availableSubcategories);
-        // Ensure 'All Subcategories' is always first
         sortedSubcategories.sort((a, b) => {
             if (a === 'All Subcategories') return -1;
             if (b === 'All Subcategories') return 1;
             return a.localeCompare(b);
         });
 
-        // --- Subcategory Selection Reset Logic ---
         const availableSubSet = new Set(sortedSubcategories);
         let resetSelection = false;
-        // Check if any *currently selected* subcategory (excluding 'All') is no longer in the available set
         for (const subcat of this.selectedSubcategories) {
             if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
                 resetSelection = true;
@@ -1808,38 +1637,26 @@ class TableManager {
             }
         }
 
-        // Reset to 'All Subcategories' if:
-        // 1. An invalid subcategory was found OR
-        // 2. The selection is currently empty OR
-        // 3. 'All Categories' is selected (forcing reset)
         if (resetSelection || this.selectedSubcategories.size === 0 || isAllCategoriesSelected) {
-            console.log(`Resetting subcategory selection to 'All Subcategories'. Reason: reset=${resetSelection}, size=${this.selectedSubcategories.size}, allCats=${isAllCategoriesSelected}`);
             this.selectedSubcategories.clear();
             this.selectedSubcategories.add('All Subcategories');
-        } else {
-             console.log("Keeping existing subcategory selection:", Array.from(this.selectedSubcategories));
         }
 
 
-        // --- Render options and Re-bind Listeners ---
         subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
-            // Apply selected class based on the final selectedSubcategories set
             `<div class="subcategory-option ${this.selectedSubcategories.has(opt) ? 'selected' : ''}" data-value="${opt}">${opt}</div>`
         ).join('');
 
         this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
 
-        // Re-attach listeners for the new subcategory options
         this.setupMultiSelect(
-             subcategoryOptionsContainer.querySelectorAll('.subcategory-option'), // Get newly added options
+             subcategoryOptionsContainer.querySelectorAll('.subcategory-option'),
              this.selectedSubcategories,
              'All Subcategories',
              this.subcategoryBtn
-             // No triggerSubcategoryUpdate needed here (false is default)
          );
     }
 
-    // --- Range Slider Logic ---
     setupRangeSlider() {
         const fromSlider = document.getElementById('fromSlider');
         const toSlider = document.getElementById('toSlider');
@@ -1854,41 +1671,38 @@ class TableManager {
         const raisedFromInput = document.getElementById('raisedFromInput');
         const raisedToInput = document.getElementById('raisedToInput');
 
-        // Check if *all* elements are found before proceeding
         if (!fromSlider || !toSlider || !fromInput || !toInput ||
             !goalFromSlider || !goalToSlider || !goalFromInput || !goalToInput ||
             !raisedFromSlider || !raisedToSlider || !raisedFromInput || !raisedToInput) {
              console.error("One or more range slider elements not found. Aborting setup.");
-             this.rangeSliderElements = null; // Indicate failure
+             this.rangeSliderElements = null;
              return;
         }
 
-        this.rangeSliderElements = { // Store references immediately
+        this.rangeSliderElements = {
             fromSlider, toSlider, fromInput, toInput,
             goalFromSlider, goalToSlider, goalFromInput, goalToInput,
             raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-            fillSlider: null // Placeholder for the function
+            fillSlider: null
         };
 
 
         const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => {
-             if (!from || !to || !controlSlider) return; // Basic sanity check
+             if (!from || !to || !controlSlider) return;
 
-            const min = parseFloat(controlSlider.min); // Use parseFloat
-            const max = parseFloat(controlSlider.max); // Use parseFloat
-            const fromVal = parseFloat(from.value); // Use parseFloat
-            const toVal = parseFloat(to.value); // Use parseFloat
+            const min = parseFloat(controlSlider.min);
+            const max = parseFloat(controlSlider.max);
+            const fromVal = parseFloat(from.value);
+            const toVal = parseFloat(to.value);
 
             const rangeDistance = max - min;
             const fromPosition = fromVal - min;
             const toPosition = toVal - min;
 
              const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
-             // Clamp percentages between 0 and 100 to avoid visual glitches
              const fromPercent = Math.min(100, Math.max(0, (fromPosition / safeRangeDistance) * 100));
              const toPercent = Math.min(100, Math.max(0, (toPosition / safeRangeDistance) * 100));
 
-            // Ensure fromPercent is not greater than toPercent
             const finalFromPercent = Math.min(fromPercent, toPercent);
             const finalToPercent = Math.max(fromPercent, toPercent);
 
@@ -1903,25 +1717,21 @@ class TableManager {
                 ${sliderColor} 100%)`;
         };
 
-        // Store the fillSlider function in the shared object
         this.rangeSliderElements.fillSlider = fillSlider;
 
-        // --- REINTRODUCED Debounced Update Request ---
         const debouncedRangeUpdate = debounce(() => {
-            this.currentPage = 1; // Reset page on range change
+            this.currentPage = 1;
             this.requestUpdate();
-        }, 400); // Debounce update request by 400ms
+        }, 400);
 
 
-        // --- Control Logic (Handles Slider/Input Interactions) ---
-        // (Control functions remain the same)
         const controlFromInput = (fromSlider, toSlider, fromInput) => {
              const minVal = parseFloat(fromSlider.min);
-             const maxVal = parseFloat(toSlider.value); // Use other slider's current value as max constraint
+             const maxVal = parseFloat(toSlider.value);
              let fromVal = parseFloat(fromInput.value);
 
              if (isNaN(fromVal) || fromVal < minVal) fromVal = minVal;
-             if (fromVal > maxVal) fromVal = maxVal; // Clamp to other slider's value
+             if (fromVal > maxVal) fromVal = maxVal;
 
              fromInput.value = fromVal;
              fromSlider.value = fromVal;
@@ -1929,12 +1739,12 @@ class TableManager {
         };
 
         const controlToInput = (fromSlider, toSlider, toInput) => {
-             const minVal = parseFloat(fromSlider.value); // Use other slider's current value as min constraint
+             const minVal = parseFloat(fromSlider.value);
              const maxVal = parseFloat(toSlider.max);
              let toVal = parseFloat(toInput.value);
 
              if (isNaN(toVal) || toVal > maxVal) toVal = maxVal;
-             if (toVal < minVal) toVal = minVal; // Clamp to other slider's value
+             if (toVal < minVal) toVal = minVal;
 
              toInput.value = toVal;
              toSlider.value = toVal;
@@ -1945,10 +1755,10 @@ class TableManager {
              const fromVal = parseFloat(fromSlider.value);
              const toVal = parseFloat(toSlider.value);
              if (fromVal > toVal) {
-                 fromSlider.value = toVal; // Prevent crossing
+                 fromSlider.value = toVal;
                  fromInput.value = toVal;
              } else {
-                 fromInput.value = fromVal; // Sync input if valid
+                 fromInput.value = fromVal;
              }
              fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         };
@@ -1957,28 +1767,21 @@ class TableManager {
              const fromVal = parseFloat(fromSlider.value);
              const toVal = parseFloat(toSlider.value);
              if (fromVal > toVal) {
-                 toSlider.value = fromVal; // Prevent crossing
+                 toSlider.value = fromVal;
                  toInput.value = fromVal;
              } else {
-                 toInput.value = toVal; // Sync input if valid
+                 toInput.value = toVal;
              }
              fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         };
 
-        // --- Event Listener Setup ---
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
-            // 'input' event for immediate visual feedback during sliding/typing
             fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
             tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
             fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
             tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-
-            // Use 'change' event on inputs to ensure final value is sent *if* user types then clicks away
-            // Debounce this as well, or send immediately? Let's debounce to be consistent.
             fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
             tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-
-             // No need for 'change' on sliders if 'input' is already debouncing the update
         };
 
 
@@ -1987,7 +1790,6 @@ class TableManager {
         setupSliderListeners(raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput);
 
 
-        // --- Initial Fill ---
         fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
         fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
@@ -2002,35 +1804,21 @@ let tableManagerInstance = null;
 function onRender(event) {
     try {
         const data = event.detail.args.component_data;
-        console.log("Streamlit RENDER event received. Data keys:", data ? Object.keys(data) : 'No data');
 
-        // Guard against multiple initializations or updates without data
         if (!data) {
              console.warn("onRender called with no data. Skipping update.");
              return;
         }
 
         if (!window.tableManagerInstance) {
-            console.log("Initializing TableManager instance...");
             window.tableManagerInstance = new TableManager(data);
-            console.log("TableManager initialized.");
-             // Expose globally ONLY if needed (e.g., for inline JS handlers)
-             // window.goToPage = window.tableManagerInstance.goToPage.bind(window.tableManagerInstance);
         } else {
-            console.log("Updating existing TableManager instance...");
-            // Potential Optimization: Compare incoming data with current state?
-            // For now, assume Streamlit sends updates when needed.
             window.tableManagerInstance.updateUIState(data);
-            console.log("UI state updated.");
-            window.tableManagerInstance.updateTableContent(data.rows_html); // Includes hiding loading
-            // console.log("Table content updated."); // Covered by updateTableContent log
+            window.tableManagerInstance.updateTableContent(data.rows_html);
             window.tableManagerInstance.updatePagination();
-            console.log("Pagination updated.");
             window.tableManagerInstance.adjustHeight();
-            // console.log("Height adjusted."); // Covered by adjustHeight log
         }
 
-        // Add ResizeObserver only once
         if (!window.resizeObserver && document.getElementById('component-root')) {
             window.resizeObserver = new ResizeObserver(debounce(() => {
                 if (window.tableManagerInstance) {
@@ -2039,14 +1827,11 @@ function onRender(event) {
             }, 150));
 
             window.resizeObserver.observe(document.getElementById('component-root'));
-            console.log("ResizeObserver attached.");
         }
-        console.log("onRender finished successfully.");
 
     } catch (error) {
         console.error("Error during onRender:", error);
         if (window.tableManagerInstance && typeof window.tableManagerInstance.showLoading === 'function') {
-             console.log("Attempting to hide loading indicator after error.");
              window.tableManagerInstance.showLoading(false);
         }
     }
@@ -2062,62 +1847,39 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 
 # --- Main App Logic ---
 
-# 1. Get the state dictionary sent by the component on the *previous* run.
 component_state_from_last_run = st.session_state.get("kickstarter_state_value", None)
-print(f"Start of Run: Received component value from previous run: {json.dumps(component_state_from_last_run)}")
-
-# Get the state that was SENT to the component in the previous run for comparison
 state_sent_last_run = st.session_state.get('state_sent_to_component', DEFAULT_COMPONENT_STATE)
 
-# 2. Check if the component actually sent back a *new* state.
-#    Compare the received state with the state we last sent TO the component.
 component_sent_new_state = False
 if component_state_from_last_run is not None:
     try:
-        # Use JSON dumps for reliable comparison of nested dicts/lists.
         last_run_str = json.dumps(component_state_from_last_run, sort_keys=True)
         sent_last_run_str = json.dumps(state_sent_last_run, sort_keys=True)
-
         if last_run_str != sent_last_run_str:
             component_sent_new_state = True
-            print(f"State change detected: Received state differs from state sent last run.")
-        else:
-             print(f"No state change: Received state matches state sent last run.")
-
     except TypeError as e:
          print(f"Error comparing states using JSON: {e}. Assuming state is new for safety.")
-         # Fallback: Treat as new state if comparison fails
          component_sent_new_state = True
-else:
-     print("No state received from component in the last run (value is None).")
 
-
-# 3. Update Streamlit session state *only if* a new, valid state was received.
 if component_sent_new_state:
-    print("Component sent NEW state. Attempting to update session state.")
-    # Validate the received structure before updating
     if (isinstance(component_state_from_last_run, dict) and
             "page" in component_state_from_last_run and
             "sort_order" in component_state_from_last_run and
             "filters" in component_state_from_last_run and
             isinstance(component_state_from_last_run.get("filters"), dict)):
 
-        # --- Safely update session state ---
         st.session_state.current_page = component_state_from_last_run["page"]
         st.session_state.sort_order = component_state_from_last_run["sort_order"]
 
-        # Validate and update filters carefully
         new_filters = component_state_from_last_run["filters"]
-        validated_filters = DEFAULT_FILTERS.copy() # Start with defaults
+        validated_filters = DEFAULT_FILTERS.copy()
         for key, default_value in DEFAULT_FILTERS.items():
             if key in new_filters:
-                 # Basic type/structure validation before assigning
                  if key == 'ranges':
                       if isinstance(new_filters[key], dict):
                           validated_range = default_value.copy()
                           for r_key, r_default in default_value.items():
                               if r_key in new_filters[key] and isinstance(new_filters[key].get(r_key), dict) and all(k in new_filters[key][r_key] for k in ['min', 'max']):
-                                  # Add type check for min/max
                                   try:
                                       min_val = float(new_filters[key][r_key]['min'])
                                       max_val = float(new_filters[key][r_key]['max'])
@@ -2129,28 +1891,15 @@ if component_sent_new_state:
                           validated_filters[key] = validated_range
                       else:
                           print(f"Warning: Invalid type for 'ranges'. Using default.")
-                 elif isinstance(new_filters.get(key), type(default_value)): # Use .get for safety
+                 elif isinstance(new_filters.get(key), type(default_value)):
                       validated_filters[key] = new_filters[key]
                  else:
                       print(f"Warning: Type mismatch for filter '{key}'. Using default.")
-            # else: # Keep the default if key is missing
-            #     print(f"Warning: Key '{key}' missing in received filters. Using default.") # Optional warning
 
         st.session_state.filters = validated_filters
-        print("Session state updated successfully from component state.")
-        # --- End safe update ---
     else:
         print(f"Warning: Invalid structure in new component state: {component_state_from_last_run}. NOT updating session state.")
-        # Keep existing session state values
-else:
-    # If component didn't send a new value (value is None or same as last sent),
-    # we continue using the existing session state values.
-    print("Component did not send a new state OR received state was invalid/same. Using existing session state.")
 
-
-print(f"State for Calculations: Page={st.session_state.current_page}, Sort={st.session_state.sort_order}, Filters={json.dumps(st.session_state.filters)}")
-
-# 4. Apply filters and sorting using the *current* session state.
 if 'base_lf' not in st.session_state:
      st.error("Base LazyFrame not found. Please reload.")
      st.stop()
@@ -2161,114 +1910,58 @@ filtered_lf = apply_filters_and_sort(
     st.session_state.sort_order
 )
 
-# 5. Calculate total rows for pagination *after* filtering.
 try:
-    print("Calculating total rows...")
-    start_count_time = time.time()
-    # Use pl.len() and standard collect() for count
-    total_rows_result_df = filtered_lf.select(pl.len()).collect() # Removed streaming=True
-    # Extract the count using item()
+    total_rows_result_df = filtered_lf.select(pl.len()).collect()
     st.session_state.total_rows = total_rows_result_df.item() if total_rows_result_df is not None and not total_rows_result_df.is_empty() else 0
-    count_duration = time.time() - start_count_time
-    # More prominent logging for the calculated total_rows
-    print(f"*** Python: Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s) ***")
 except Exception as e:
     st.error(f"Error calculating total rows: {e}")
-    st.session_state.total_rows = 0 # Set to 0 on error
+    st.session_state.total_rows = 0
 
-
-# 6. Calculate pagination details and fetch the current page data.
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 and st.session_state.total_rows > 0 else 1
-print(f"*** Python: Calculated total_pages = {total_pages} based on total_rows={st.session_state.total_rows} ***") # Log calculated total_pages
-# Clamp current page *after* total rows calculation
-current_page_before_clamp = st.session_state.current_page
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages))
-if current_page_before_clamp != st.session_state.current_page:
-    # Log if clamping occurred
-    print(f"*** Python: Clamped current_page from {current_page_before_clamp} to {st.session_state.current_page} (total_pages={total_pages}) ***")
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
-df_page = pl.DataFrame() # Initialize as empty DataFrame
+df_page = pl.DataFrame()
 
-# Fetch the specific page slice using slice().collect()
 if st.session_state.total_rows > 0 and offset < st.session_state.total_rows:
     try:
-        print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
-        start_fetch_time = time.time()
-        # Fetch only the slice needed for the current page using standard collect()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect() # Removed streaming=True
-        fetch_duration = time.time() - start_fetch_time
-        print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
-
-        # Debugging for specific filters if needed
-        is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States']
-        if is_state_filter_active and not df_page.is_empty():
-             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}")
-
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect()
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
-        df_page = pl.DataFrame() # Ensure df_page is empty on error
-else:
-     # Log why fetch is skipped
-     print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}, Total Pages: {total_pages}")
+        df_page = pl.DataFrame()
 
 
-# 7. Generate HTML for the fetched page.
-print("Generating HTML for table...")
-header_html, rows_html = generate_table_html_for_page(df_page) # df_page can be empty here
+header_html, rows_html = generate_table_html_for_page(df_page)
 
-# Debugging HTML generation if needed
-is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States'] # Re-check for logging consistency
-if is_state_filter_active and not df_page.is_empty():
-    print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
-
-
-# 8. Prepare the data payload to send *to* the component for this render.
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
-    "total_rows": st.session_state.total_rows, # Crucial for pagination UI
-    "filters": st.session_state.filters, # Send the filters used for this render
-    "sort_order": st.session_state.sort_order, # Send the sort order used
+    "total_rows": st.session_state.total_rows,
+    "filters": st.session_state.filters,
+    "sort_order": st.session_state.sort_order,
     "header_html": header_html,
     "rows_html": rows_html,
-    # Pass metadata needed for UI rendering
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
-    # "rerender_trigger": time.time() # Generally not needed with proper state handling
 }
-# Log the specific total_rows value being sent
-print(f"*** Python: Payload PREPARED. Sending total_rows: {component_data_payload['total_rows']} to component. ***")
 
-# 9. Store the core state *being sent* this run, for comparison on the next run.
 state_being_sent_this_run = {
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order,
 }
-# Use JSON roundtrip for a safe deep copy
 st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_this_run))
-print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
-# Redundant log removed, covered by the payload log above
-# print(f"DEBUG: Sending total_rows={st.session_state.total_rows} to component payload.")
 
 
-# 10. Render the component.
-print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
-    key="kickstarter_state", # Stable key
+    key="kickstarter_state",
     default=None
 )
 
-# 11. Compare received state with state just sent, and trigger immediate rerun if necessary
-print(f"End of Run: Received value from component: {json.dumps(component_return_value)}")
-# state_sent_this_run = st.session_state.get("state_sent_to_component") # Already have it in state_being_sent_to_component
-
 needs_rerun = False
 if component_return_value is not None:
-    # Basic validation of the received structure
     if (isinstance(component_return_value, dict) and
             "page" in component_return_value and
             "sort_order" in component_return_value and
@@ -2277,57 +1970,21 @@ if component_return_value is not None:
 
         try:
             received_state_str = json.dumps(component_return_value, sort_keys=True)
-            # Compare with the state Python just constructed and sent
             sent_state_str = json.dumps(state_being_sent_this_run, sort_keys=True)
 
             if received_state_str != sent_state_str:
-                print("Change detected: Component state differs from state JUST sent this run.")
-
-                # --- Update Session State Directly ---
-                # This ensures the *next* run (triggered by rerun) starts with the correct state
                 st.session_state.current_page = component_return_value["page"]
                 st.session_state.sort_order = component_return_value["sort_order"]
 
-                # Safely update filters (redundant validation logic removed for brevity, same as step 3)
-                # (Assuming validation in step 3 is sufficient for the rerun case)
-                # Re-add validation if strictness is needed here too
-                st.session_state.filters = component_return_value["filters"] # Trusting the structure based on initial check
-
-                print("Session state updated based on component return value FOR RERUN.")
-                # --- END Session State Update ---
-
+                st.session_state.filters = component_return_value["filters"]
                 needs_rerun = True
-            else:
-                print("No change detected: Component state matches state JUST sent this run.")
         except Exception as e:
             print(f"Error during state comparison or update for rerun: {e}")
     else:
         print("Warning: Invalid structure received from component at end of run. Skipping comparison/update.")
-else:
-    print("Component returned None at end of run. Skipping comparison.")
 
 
-# 12. Store the raw component value for the *next* script run's step 1
-st.session_state.kickstarter_state_value = component_return_value # Store it regardless
+st.session_state.kickstarter_state_value = component_return_value
 
-
-# 13. Trigger rerun if needed
 if needs_rerun:
-    print(">>> Triggering st.rerun() <<<")
     st.rerun()
-else:
-     print("Script run finished normally.")
-print(f"End of Run: Stored component return value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
-
-
-# --- REMOVED Immediate Rerun Logic ---
-# The script will naturally rerun if the component sends back a *different* state
-# than what was sent, because that difference will be detected at step #2/#3
-# in the *next* run, leading to updated calculations and a new render.
-
-print("Script run finished.")
-
-
-# Optional: Debug footer
-# st.markdown("---")
-# st.caption(f"Debug Info: Page {st.session_state.current_page} of {total_pages}, Total Rows: {st.session_state.total_rows}, Date: {st.session_state.filters.get('date')}, Sort: {st.session_state.sort_order}")
