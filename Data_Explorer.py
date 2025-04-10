@@ -91,8 +91,78 @@ def generate_component(name, template="", script=""):
     return f
 
 # *** IMPORTANT: Process the Parquet file before running this script (See README.md) ***
-parquet_source_path = "data.parquet" 
+parquet_source_path = "data.parquet"
+filter_metadata_path = "filter_metadata.json" # Define path for metadata
 
+# --- Load Filter Metadata ---
+filter_options = { # Default structure
+    'categories': ['All Categories'],
+    'countries': ['All Countries'],
+    'states': ['All States'],
+    'date_ranges': [
+        'All Time', 'Last Month', 'Last 6 Months', 'Last Year',
+        'Last 5 Years', 'Last 10 Years'
+    ]
+}
+category_subcategory_map = {'All Categories': ['All Subcategories']}
+min_max_values = {
+    'pledged': {'min': 0, 'max': 1000},
+    'goal': {'min': 0, 'max': 10000},
+    'raised': {'min': 0, 'max': 500}
+}
+
+if not os.path.exists(filter_metadata_path):
+    st.error(f"Filter metadata file not found at '{filter_metadata_path}'. Please run the data processing script (`database_download.py`) first.")
+    st.stop()
+else:
+    try:
+        with open(filter_metadata_path, 'r', encoding='utf-8') as f:
+            loaded_metadata = json.load(f)
+
+        # Validate and load categories, countries, states
+        filter_options['categories'] = loaded_metadata.get('categories', ['All Categories'])
+        filter_options['countries'] = loaded_metadata.get('countries', ['All Countries'])
+        # Ensure states are loaded correctly (should be capitalized plain names)
+        filter_options['states'] = loaded_metadata.get('states', ['All States'])
+        filter_options['date_ranges'] = loaded_metadata.get('date_ranges', filter_options['date_ranges']) # Load if present, else keep default
+
+        # Load category-subcategory map
+        category_subcategory_map = loaded_metadata.get('category_subcategory_map', {'All Categories': ['All Subcategories']})
+        # Ensure 'All Categories' entry exists and has 'All Subcategories'
+        if 'All Categories' not in category_subcategory_map:
+            category_subcategory_map['All Categories'] = ['All Subcategories']
+        if 'All Subcategories' not in category_subcategory_map['All Categories']:
+             category_subcategory_map['All Categories'].insert(0, 'All Subcategories')
+        # Add all unique subcategories to 'All Categories' list if not already present
+        all_subs = set(loaded_metadata.get('subcategories', ['All Subcategories']))
+        all_cats_subs = set(category_subcategory_map['All Categories'])
+        missing_subs = all_subs - all_cats_subs
+        if missing_subs:
+             category_subcategory_map['All Categories'].extend(sorted(list(missing_subs)))
+
+
+        # Load min/max values, keeping defaults if keys are missing
+        loaded_min_max = loaded_metadata.get('min_max_values', {})
+        min_max_values['pledged'] = loaded_min_max.get('pledged', min_max_values['pledged'])
+        min_max_values['goal'] = loaded_min_max.get('goal', min_max_values['goal'])
+        min_max_values['raised'] = loaded_min_max.get('raised', min_max_values['raised'])
+
+        print("Filter metadata loaded successfully.")
+
+    except json.JSONDecodeError:
+        st.error(f"Error decoding JSON from '{filter_metadata_path}'. File might be corrupted. Using default filters.")
+    except Exception as e:
+        st.error(f"Error loading filter metadata from '{filter_metadata_path}': {e}. Using default filters.")
+
+# Extract min/max for convenience
+min_pledged = min_max_values['pledged']['min']
+max_pledged = min_max_values['pledged']['max']
+min_goal = min_max_values['goal']['min']
+max_goal = min_max_values['goal']['max']
+min_raised = min_max_values['raised']['min']
+max_raised = min_max_values['raised']['max']
+
+# --- Load Parquet Data ---
 if not os.path.exists(parquet_source_path):
     st.error(f"Parquet data source not found at '{parquet_source_path}'. Please ensure the file/directory exists in the project root.")
     st.stop()
@@ -134,117 +204,6 @@ if 'State' in collected_schema:
     )
 else:
     st.warning("Column 'State' not found in the schema. Skipping state styling.")
-
-def get_filter_options(schema_dict: dict, data_lf: pl.LazyFrame):
-    print("Calculating filter options...")
-    options = {
-        'categories': ['All Categories'],
-        'countries': ['All Countries'],
-        'states': ['All States'],
-        'date_ranges': [
-            'All Time', 'Last Month', 'Last 6 Months', 'Last Year',
-            'Last 5 Years', 'Last 10 Years'
-        ]
-    }
-    category_subcategory_map = {'All Categories': ['All Subcategories']}
-
-    try:
-        if 'Category' in schema_dict:
-            categories_unique = data_lf.select(pl.col('Category')).unique().collect()['Category']
-            valid_categories = sorted(categories_unique.filter(categories_unique.is_not_null() & (categories_unique != "N/A")).to_list())
-            options['categories'] += valid_categories
-            for cat in valid_categories:
-                category_subcategory_map[cat] = []
-
-        if 'Category' in schema_dict and 'Subcategory' in schema_dict:
-             cat_subcat_pairs = data_lf.select(['Category', 'Subcategory']).unique().drop_nulls().collect()
-             all_subcategories_set = set()
-             for row in cat_subcat_pairs.iter_rows(named=True):
-                  category = row['Category']
-                  subcategory = row['Subcategory']
-                  if category and subcategory and category != "N/A" and subcategory != "N/A":
-                       if category in category_subcategory_map:
-                           category_subcategory_map[category].append(subcategory)
-                       all_subcategories_set.add(subcategory)
-
-             all_sorted_subcats = sorted(list(all_subcategories_set))
-             category_subcategory_map['All Categories'] = ['All Subcategories'] + all_sorted_subcats
-
-             for cat in category_subcategory_map:
-                 subcats = category_subcategory_map[cat]
-                 prefix = []
-                 rest = []
-                 if 'All Subcategories' in subcats:
-                     prefix = ['All Subcategories']
-                     rest = sorted([s for s in subcats if s != 'All Subcategories'])
-                 else:
-                      rest = sorted(subcats)
-                 category_subcategory_map[cat] = prefix + rest
-
-        elif 'Subcategory' in schema_dict and 'Category' not in schema_dict:
-             subcategories_unique = data_lf.select(pl.col('Subcategory')).unique().collect()['Subcategory']
-             all_subcats = sorted(subcategories_unique.filter(subcategories_unique.is_not_null() & (subcategories_unique != "N/A")).to_list())
-             category_subcategory_map['All Categories'] = ['All Subcategories'] + all_subcats
-
-        if not category_subcategory_map['All Categories']:
-             category_subcategory_map['All Categories'] = ['All Subcategories']
-
-        if 'Country' in schema_dict:
-             countries_unique = data_lf.select(pl.col('Country')).unique().collect()['Country']
-             options['countries'] += sorted(countries_unique.filter(countries_unique.is_not_null() & (countries_unique != "N/A")).to_list())
-
-        if 'State' in schema_dict and schema_dict['State'] == pl.Utf8:
-             states_collected = data_lf.select('State').collect()['State']
-             sample_state = states_collected.head(1).to_list()
-             if sample_state and sample_state[0] and sample_state[0].startswith('<div class="state_cell state-'):
-                  extracted_states = states_collected.str.extract(r'>(\w+)<', 1).unique().drop_nulls().to_list()
-                  options['states'] += sorted([state.capitalize() for state in extracted_states if state.lower() != 'unknown'])
-             else:
-                  plain_states = states_collected.filter(states_collected.is_not_null() & (states_collected != "N/A")).unique().to_list()
-                  options['states'] += sorted([s.capitalize() for s in plain_states])
-        print("Filter options calculated.")
-
-    except Exception as e:
-         st.error(f"Error calculating filter options: {e}")
-         options = {
-             'categories': ['All Categories'], 'countries': ['All Countries'], 'states': ['All States'],
-             'date_ranges': ['All Time', 'Last Month', 'Last 6 Months', 'Last Year', 'Last 5 Years', 'Last 10 Years']
-         }
-         category_subcategory_map = {'All Categories': ['All Subcategories']}
-
-    return options, category_subcategory_map
-
-filter_options, category_subcategory_map = get_filter_options(lf.collect_schema(), lf) 
-
-min_pledged, max_pledged = 0, 1000
-min_goal, max_goal = 0, 10000
-min_raised, max_raised = 0, 500 
-
-required_minmax_cols = ['Raw Pledged', 'Raw Goal', 'Raw Raised']
-if all(col in lf.collect_schema() for col in required_minmax_cols):
-    print("Calculating min/max filter ranges...")
-    try:
-        min_max_vals = lf.select([
-            pl.min('Raw Pledged').alias('min_pledged'),
-            pl.max('Raw Pledged').alias('max_pledged'),
-            pl.min('Raw Goal').alias('min_goal'),
-            pl.max('Raw Goal').alias('max_goal'),
-            pl.min('Raw Raised').alias('min_raised'),
-            pl.max('Raw Raised').alias('max_raised_calc')
-        ]).collect()
-
-        min_pledged = int(min_max_vals['min_pledged'][0]) if min_max_vals['min_pledged'][0] is not None else 0
-        max_pledged = int(min_max_vals['max_pledged'][0]) if min_max_vals['max_pledged'][0] is not None else 1000
-        min_goal = int(min_max_vals['min_goal'][0]) if min_max_vals['min_goal'][0] is not None else 0
-        max_goal = int(min_max_vals['max_goal'][0]) if min_max_vals['max_goal'][0] is not None else 10000
-        min_raised = int(min_max_vals['min_raised'][0]) if min_max_vals['min_raised'][0] is not None else 0
-        max_raised_calc_val = min_max_vals['max_raised_calc'][0]
-        max_raised = int(max_raised_calc_val) if max_raised_calc_val is not None else 500
-        print("Min/max ranges calculated.")
-    except Exception as e:
-        st.error(f"Error calculating min/max filter ranges: {e}. Using defaults.")
-else:
-    st.warning("Missing columns required for min/max filter ranges in schema. Using defaults.")
 
 print("Schema before final collect:", lf.collect_schema())
 
@@ -322,20 +281,36 @@ def generate_table_html(df_display: pl.DataFrame):
         '''
         visible_cells = ''
         for col in visible_columns:
-            value = row.get(col, 'N/A') 
+            value = row.get(col, 'N/A')
             if col == 'Link':
                 url = str(value) if value else '#'
                 display_url = url if len(url) < 60 else url[:57] + '...'
                 visible_cells += f'<td><a href="{url}" target="_blank" title="{url}">{display_url}</a></td>'
-            elif col == 'Pledged Amount': 
-                import html
-                try:
-                    amount = int(float(value))
-                    formatted_value = f"${amount:,}" 
-                except (ValueError, TypeError):
-                    formatted_value = 'N/A'
+            elif col == 'Pledged Amount':
+                # Use Raw Pledged for accurate formatting if available, else fallback
+                raw_pledged_val = row.get('Raw Pledged')
+                if raw_pledged_val is not None:
+                    try:
+                        amount = int(float(raw_pledged_val))
+                        formatted_value = f"${amount:,}"
+                    except (ValueError, TypeError):
+                         # Fallback to display value if Raw Pledged fails
+                         amount_disp = value # value is 'Pledged Amount' here
+                         try:
+                              amount = int(float(amount_disp))
+                              formatted_value = f"${amount:,}"
+                         except (ValueError, TypeError):
+                              formatted_value = 'N/A'
+                else: # Fallback if Raw Pledged doesn't exist
+                     try:
+                          amount = int(float(value)) # value is 'Pledged Amount'
+                          formatted_value = f"${amount:,}"
+                     except (ValueError, TypeError):
+                          formatted_value = 'N/A'
+
+                import html # Ensure html is imported
                 visible_cells += f'<td>{html.escape(formatted_value)}</td>'
-            elif col == 'State': 
+            elif col == 'State':
                  state_html = str(value) if value is not None else 'N/A'
                  visible_cells += f'<td>{state_html}</td>'
             else:
@@ -1067,10 +1042,20 @@ script = """
             this.currentPage = 1;
             this.pageSize = 10;
             this.currentSearchTerm = '';
-            this.currentFilters = null;
+            this.currentFilters = {
+                categories: ['All Categories'],
+                subcategories: ['All Subcategories'],
+                countries: ['All Countries'],
+                states: ['All States'],
+                date: 'All Time',
+                ranges: {
+                    pledged: { min: parseFloat(document.getElementById('fromInput').min), max: parseFloat(document.getElementById('fromInput').max) },
+                    goal: { min: parseFloat(document.getElementById('goalFromInput').min), max: parseFloat(document.getElementById('goalFromInput').max) },
+                    raised: { min: parseFloat(document.getElementById('raisedFromInput').min), max: parseFloat(document.getElementById('raisedFromInput').max) }
+                }
+            };
             this.currentSort = 'popularity';
             this.initialize();
-            this.resetFilters();
         }
 
         async sortRows(sortType) {
@@ -1229,19 +1214,19 @@ script = """
             }
 
             const stateCell = row.querySelector('.state_cell');
-            let state = '';
+            let state = 'unknown';
             if (stateCell) {
-                for (const cls of stateCell.classList) {
-                    if (cls.startsWith('state-')) {
-                        state = cls.substring(6);
-                        break;
-                    }
+                const classList = stateCell.className.split(' ');
+                const stateClass = classList.find(cls => cls.startsWith('state-'));
+                if (stateClass) {
+                    state = stateClass.substring(6).toLowerCase();
                 }
             }
             if (!filters.states.includes('All States')) {
-                const stateLower = state.toLowerCase();
-                const matchingState = filters.states.find(s => s.toLowerCase() === stateLower);
-                if (!matchingState) return false;
+                const stateMatches = filters.states.some(filterState => filterState.toLowerCase() === state);
+                if (!stateMatches) {
+                     return false;
+                }
             }
 
             const pledged = parseFloat(row.dataset.pledged);
@@ -1249,20 +1234,19 @@ script = """
             const raised = parseFloat(row.dataset.raised);
             const date = new Date(row.dataset.date);
 
-            const minPledged = parseFloat(document.getElementById('fromInput').value);
-            const maxPledged = parseFloat(document.getElementById('toInput').value);
-            if (pledged < minPledged || pledged > maxPledged) return false;
+            const minPledged = filters.ranges.pledged.min;
+            const maxPledged = filters.ranges.pledged.max;
+            if (isNaN(pledged) || pledged < minPledged || pledged > maxPledged) return false;
 
-            const minGoal = parseFloat(document.getElementById('goalFromInput').value);
-            const maxGoal = parseFloat(document.getElementById('goalToInput').value);
-            if (goal < minGoal || goal > maxGoal) return false;
+            const minGoal = filters.ranges.goal.min;
+            const maxGoal = filters.ranges.goal.max;
+            if (isNaN(goal) || goal < minGoal || goal > maxGoal) return false;
 
-            const minRaised = parseFloat(document.getElementById('raisedFromInput').value);
-            const maxRaised = parseFloat(document.getElementById('raisedToInput').value);
-            const raisedValue = parseFloat(row.dataset.raised);
-            
-            if (raisedValue === 0 && minRaised > 0) return false;
-            if (raisedValue < minRaised || raisedValue > maxRaised) return false;
+            const minRaised = filters.ranges.raised.min;
+            const maxRaised = filters.ranges.raised.max;
+            if (isNaN(raised)) return false;
+            if (raised === 0.0 && minRaised > 0) return false;
+            if (raised < minRaised || raised > maxRaised) return false;
 
             if (filters.date !== 'All Time') {
                 const now = new Date();
@@ -1320,30 +1304,37 @@ script = """
             if (window.selectedStates) window.selectedStates.add('All States');
 
             if (this.rangeSliderElements) {
-                const { 
+                const {
                     fromSlider, toSlider, fromInput, toInput,
                     goalFromSlider, goalToSlider, goalFromInput, goalToInput,
                     raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                    fillSlider 
+                    fillSlider
                 } = this.rangeSliderElements;
 
-                fromSlider.value = fromSlider.min;
-                toSlider.value = toSlider.max;
-                fromInput.value = fromSlider.min;
-                toInput.value = toSlider.max;
-                fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+                 const minPledgedVal = fromSlider.min;
+                 const maxPledgedVal = toSlider.max;
+                 const minGoalVal = goalFromSlider.min;
+                 const maxGoalVal = goalToSlider.max;
+                 const minRaisedVal = raisedFromSlider.min;
+                 const maxRaisedVal = raisedToSlider.max;
 
-                goalFromSlider.value = goalFromSlider.min;
-                goalToSlider.value = goalToSlider.max;
-                goalFromInput.value = goalFromSlider.min;
-                goalToInput.value = goalToSlider.max;
-                fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+                 fromSlider.value = minPledgedVal;
+                 toSlider.value = maxPledgedVal;
+                 fromInput.value = minPledgedVal;
+                 toInput.value = maxPledgedVal;
+                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
 
-                raisedFromSlider.value = raisedFromSlider.min;
-                raisedToSlider.value = raisedToSlider.max;
-                raisedFromInput.value = raisedFromSlider.min;
-                raisedToInput.value = raisedToSlider.max;
-                fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+                 goalFromSlider.value = minGoalVal;
+                 goalToSlider.value = maxGoalVal;
+                 goalFromInput.value = minGoalVal;
+                 goalToInput.value = maxGoalVal;
+                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+
+                 raisedFromSlider.value = minRaisedVal;
+                 raisedToSlider.value = maxRaisedVal;
+                 raisedFromInput.value = minRaisedVal;
+                 raisedToInput.value = maxRaisedVal;
+                 fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
             }
 
             const dateFilterSelect = document.getElementById('dateFilter');
@@ -1352,7 +1343,18 @@ script = """
             }
             this.searchInput.value = '';
             this.currentSearchTerm = '';
-            this.currentFilters = null; 
+            this.currentFilters = {
+                categories: Array.from(window.selectedCategories),
+                subcategories: Array.from(window.selectedSubcategories),
+                countries: Array.from(window.selectedCountries),
+                states: Array.from(window.selectedStates),
+                date: document.getElementById('dateFilter') ? document.getElementById('dateFilter').value : 'All Time',
+                ranges: {
+                    pledged: { min: parseFloat(fromInput.value), max: parseFloat(toInput.value) },
+                    goal: { min: parseFloat(goalFromInput.value), max: parseFloat(goalToInput.value) },
+                    raised: { min: parseFloat(raisedFromInput.value), max: parseFloat(raisedToInput.value) }
+                }
+            };
             this.currentSort = 'popularity';
             document.getElementById('sortFilter').value = 'popularity';
             this.visibleRows = this.allRows;
