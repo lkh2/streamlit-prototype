@@ -2042,7 +2042,8 @@ try:
     print("Calculating total rows...")
     start_count_time = time.time()
     # Optimization: Select only a single constant column for counting
-    total_rows_result = filtered_lf.select(pl.lit(1).alias("count")).collect(engine="streaming")
+    # --- REMOVED engine="streaming" ---
+    total_rows_result = filtered_lf.select(pl.lit(1).alias("count")).collect()
     # st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     st.session_state.total_rows = total_rows_result.height # Getting height is usually efficient enough
     count_duration = time.time() - start_count_time
@@ -2075,8 +2076,8 @@ if st.session_state.total_rows > 0: # Only attempt collect/slice if rows are exp
         print("Collecting entire filtered/sorted DataFrame...")
         start_collect_time = time.time()
         # Collect the whole filtered/sorted frame (potentially memory intensive)
-        # Keep streaming for the full collect if possible, remove if it also panics
-        df_filtered_collected = filtered_lf.collect(engine="streaming")
+        # --- REMOVED engine="streaming" ---
+        df_filtered_collected = filtered_lf.collect()
         collect_duration = time.time() - start_collect_time
         print(f"Collected {len(df_filtered_collected)} rows (took {collect_duration:.2f}s)")
 
