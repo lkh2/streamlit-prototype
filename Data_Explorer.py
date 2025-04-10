@@ -956,6 +956,15 @@ css = """
         background-color: #f8f8f8 !important; /* Override hover effects */
         color: #999 !important;
     }
+
+    #categoryFilterBtn.disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        pointer-events: none; /* Also prevents dropdown from opening */
+        background-color: #f0f0f0; /* A slightly grey background */
+        color: #999; /* Grey text */
+    }
+
 </style>
 """
 
@@ -1691,7 +1700,7 @@ class TableManager {
 
     updateCategoryInteractionState() {
         const categoryOptions = document.querySelectorAll('#categoryOptionsContainer .category-option');
-        if (!categoryOptions || categoryOptions.length === 0 || !this.selectedSubcategories) return;
+        if (!categoryOptions || categoryOptions.length === 0 || !this.selectedSubcategories || !this.categoryBtn) return;
 
         const hasSpecificSubcategory = Array.from(this.selectedSubcategories).some(sub => sub !== 'All Subcategories');
 
@@ -1699,10 +1708,12 @@ class TableManager {
             categoryOptions.forEach(option => {
                 option.classList.add('disabled');
             });
+            this.categoryBtn.classList.add('disabled');
         } else {
             categoryOptions.forEach(option => {
                 option.classList.remove('disabled');
             });
+             this.categoryBtn.classList.remove('disabled');
         }
 
         this.setupMultiSelect(
