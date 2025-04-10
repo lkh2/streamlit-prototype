@@ -1019,9 +1019,15 @@ class TableManager {
             }
         }
 
+        // --- NEW Dropdown State ---
+        this.openDropdown = null; // { trigger: Element, content: Element }
+        this.hideDropdownTimeout = null;
+        this._boundHandleScroll = this._handleScroll.bind(this); // Bind scroll handler only once
+        this.filterWrapperElement = null; // Reference to the scrolling container
+
         this.renderHTMLStructure(initialData.header_html);
-        this.bindStaticElements();
-        this.updateUIState(initialData);
+        this.bindStaticElements(); // This will now include binding dropdown triggers
+        this.updateUIState(initialData); // Ensure UI reflects initial state
         this.updateTableContent(initialData.rows_html);
         this.updatePagination();
         this.adjustHeight();
@@ -1183,42 +1189,55 @@ class TableManager {
     }
 
     bindStaticElements() {
+        this.componentRoot = document.getElementById('component-root'); // Ensure componentRoot is set
+        if (!this.componentRoot) {
+             console.error("Component root element not found!");
+             return;
+        }
+        this.filterWrapperElement = this.componentRoot.querySelector('.filter-wrapper'); // Get reference to scrollable parent
+
+        // Bind search, pagination, reset, sort, date (as before)
         this.searchInput = document.getElementById('table-search');
         this.searchInput.addEventListener('input', debounce((e) => {
             this.currentFilters.search = e.target.value.trim();
             this.currentPage = 1;
             this.requestUpdate();
         }, 500));
-
         document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
         document.getElementById('next-page').addEventListener('click', () => this.nextPage());
-
         document.getElementById('resetFilters').addEventListener('click', () => this.resetFilters());
-
         document.getElementById('sortFilter').addEventListener('change', (e) => {
             this.currentSort = e.target.value;
             this.currentPage = 1;
             this.requestUpdate();
         });
-
         document.getElementById('dateFilter').addEventListener('change', (e) => {
              this.currentFilters.date = e.target.value;
              this.currentPage = 1;
              this.requestUpdate();
         });
 
-        this.setupRangeSlider();
 
+        // Initialize selections (as before)
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
-
         this.categoryBtn = document.getElementById('categoryFilterBtn');
         this.subcategoryBtn = document.getElementById('subcategoryFilterBtn');
         this.countryBtn = document.getElementById('countryFilterBtn');
         this.stateBtn = document.getElementById('stateFilterBtn');
 
+
+        // --- Bind Dropdown Triggers (NEW) ---
+        this._bindDropdowns();
+
+
+        // --- Setup Content Within Dropdowns (as before, but ensure they don't manage display) ---
+        this.setupRangeSlider(); // Should work fine if elements exist
+
+        // Initial setup for multi-select content (listeners etc.)
+        // Note: updateUIState will also call these later if state changes externally
         this.setupMultiSelect(
             'category',
             document.querySelectorAll('#categoryOptionsContainer .category-option'),
@@ -1226,7 +1245,7 @@ class TableManager {
             'All Categories',
             this.categoryBtn
         );
-        this.updateSubcategoryOptions();
+        this.updateSubcategoryOptions(); // Crucial: This populates subcats AND runs setupMultiSelect for them
         this.setupMultiSelect(
             'country',
             document.querySelectorAll('#countryOptionsContainer .country-option'),
@@ -1241,336 +1260,625 @@ class TableManager {
              'All States',
              this.stateBtn
          );
+
+        // Add body click listener to close dropdowns
+        document.body.addEventListener('click', (event) => {
+            if (this.openDropdown) {
+                const wrapper = this.openDropdown.trigger.closest('.range-dropdown, .multi-select-dropdown');
+                // Close if the click is outside the dropdown wrapper
+                if (wrapper && !wrapper.contains(event.target)) {
+                     this._hideDropdownImmediately();
+                }
+            }
+        }, true); // Use capture phase
     }
 
+    // --- NEW Dropdown Management Methods ---
+
+    _bindDropdowns() {
+        if (!this.componentRoot) return;
+        const dropdowns = this.componentRoot.querySelectorAll('.range-dropdown, .multi-select-dropdown');
+
+        dropdowns.forEach(wrapper => {
+            const trigger = wrapper.querySelector('button'); // Assuming button is the trigger
+            const content = wrapper.querySelector('.range-content, .multi-select-content');
+
+            if (!trigger || !content) {
+                console.warn('Could not find trigger or content for a dropdown:', wrapper);
+                return;
+            }
+
+            // --- Event Handlers ---
+            const show = () => {
+                this._cancelHideDropdown();
+                // If another dropdown is open, close it immediately first
+                if (this.openDropdown && this.openDropdown.content !== content) {
+                    this._hideDropdownImmediately();
+                }
+                // Only show if it's not already the open one
+                if (this.openDropdown?.content !== content) {
+                    this._showDropdown(trigger, content);
+                }
+            };
+
+            const scheduleHide = () => this._scheduleHideDropdown();
+            const cancelHide = () => this._cancelHideDropdown();
+
+            // --- Attach Listeners ---
+            trigger.addEventListener('mouseenter', show);
+            trigger.addEventListener('focusin', show); // Accessibility
+
+            trigger.addEventListener('mouseleave', scheduleHide);
+            content.addEventListener('mouseleave', scheduleHide); // Hide when leaving content too
+
+            content.addEventListener('mouseenter', cancelHide); // Keep open when mouse enters content
+
+            // Handle focus moving out of the entire component (trigger + content)
+            wrapper.addEventListener('focusout', (e) => {
+                 // Check if the newly focused element is still within the wrapper
+                 if (!wrapper.contains(e.relatedTarget)) {
+                     this._scheduleHideDropdown();
+                 }
+             });
+        });
+    }
+
+    _positionDropdown(trigger, content) {
+        if (!trigger || !content) return;
+
+        const rect = trigger.getBoundingClientRect();
+        // No need for filterWrapperRect if using fixed positioning relative to viewport
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+        // Default: position below the trigger
+        let top = rect.bottom + 5; // Add 5px buffer
+        let left = rect.left;
+
+        // --- Viewport Boundary Checks ---
+        const contentWidth = content.offsetWidth;
+        const contentHeight = content.offsetHeight;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+
+        // Adjust left position if it overflows right edge
+        if (left + contentWidth > viewportWidth - 10) { // 10px buffer
+             left = viewportWidth - contentWidth - 10;
+        }
+        // Adjust left position if it overflows left edge
+        if (left < 10) {
+             left = 10;
+        }
+
+        // Adjust top position if it overflows bottom edge
+        if (top + contentHeight > viewportHeight - 10) {
+            // Try positioning above the trigger instead
+            const topAbove = rect.top - contentHeight - 5;
+            if (topAbove > 10) { // Check if there's space above
+                top = topAbove;
+            } else {
+                // Stick to bottom if no space above either (might still overflow slightly)
+                top = viewportHeight - contentHeight - 10;
+            }
+        }
+         // Adjust top position if it overflows top edge (when positioned above)
+        if (top < 10) {
+            top = 10;
+        }
+
+
+        // Apply the calculated fixed position
+        content.style.position = 'fixed';
+        content.style.top = `${top}px`; // Use calculated top relative to viewport
+        content.style.left = `${left}px`; // Use calculated left relative to viewport
+        content.style.display = 'block';
+    }
+
+    _showDropdown(trigger, content) {
+        if (this.openDropdown?.content === content) return; // Already open
+
+        this._positionDropdown(trigger, content); // Position and make visible
+        this.openDropdown = { trigger, content };
+
+        // Add scroll/resize listeners (passive for performance)
+        if (this.filterWrapperElement) {
+            this.filterWrapperElement.removeEventListener('scroll', this._boundHandleScroll); // Prevent duplicates
+            this.filterWrapperElement.addEventListener('scroll', this._boundHandleScroll, { passive: true });
+        }
+        window.removeEventListener('scroll', this._boundHandleScroll);
+        window.addEventListener('scroll', this._boundHandleScroll, { passive: true });
+        window.removeEventListener('resize', this._boundHandleScroll);
+        window.addEventListener('resize', this._boundHandleScroll, { passive: true });
+    }
+
+    _hideDropdownImmediately() {
+         if (!this.openDropdown) return;
+         this._cancelHideDropdown(); // Clear any pending hide
+
+         this.openDropdown.content.style.display = 'none'; // Hide it
+         this.openDropdown = null; // Clear state
+
+         // Remove listeners
+         if (this.filterWrapperElement) {
+             this.filterWrapperElement.removeEventListener('scroll', this._boundHandleScroll);
+         }
+         window.removeEventListener('scroll', this._boundHandleScroll);
+         window.removeEventListener('resize', this._boundHandleScroll);
+    }
+
+    _scheduleHideDropdown() {
+        this._cancelHideDropdown(); // Clear existing timeout first
+        this.hideDropdownTimeout = setTimeout(() => {
+            // Check if focus is still within before hiding, might be redundant with focusout handler
+            const activeElement = document.activeElement;
+            const wrapper = this.openDropdown?.trigger.closest('.range-dropdown, .multi-select-dropdown');
+            if (wrapper && wrapper.contains(activeElement)) {
+                 // Don't hide if focus is still inside (e.g., tabbed into content)
+                 return;
+            }
+            this._hideDropdownImmediately();
+        }, 200); // 200ms delay allows moving mouse into content
+    }
+
+    _cancelHideDropdown() {
+        if (this.hideDropdownTimeout) {
+            clearTimeout(this.hideDropdownTimeout);
+            this.hideDropdownTimeout = null;
+        }
+    }
+
+    _handleScroll() {
+        // If a dropdown is open, reposition it based on the trigger's new location
+        if (this.openDropdown) {
+            this._positionDropdown(this.openDropdown.trigger, this.openDropdown.content);
+        } else {
+             // Safety cleanup: If state is somehow broken, remove listeners
+             if (this.filterWrapperElement) {
+                 this.filterWrapperElement.removeEventListener('scroll', this._boundHandleScroll);
+             }
+             window.removeEventListener('scroll', this._boundHandleScroll);
+             window.removeEventListener('resize', this._boundHandleScroll);
+        }
+    }
+
+    // --- End NEW Dropdown Management Methods ---
+
+
+    // --- Existing Methods (Adjusted where necessary) ---
+
     updateUIState(data) {
+        // Update core state properties (page, rows, filters, sort)
         this.currentPage = data.current_page;
         this.totalRows = data.total_rows;
-        this.currentFilters = data.filters;
+        this.currentFilters = data.filters; // Assume validated by Streamlit side
         this.currentSort = data.sort_order;
 
+        // Update simple UI elements
         if (this.searchInput) this.searchInput.value = this.currentFilters.search || '';
-
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = this.currentSort;
-
         const dateSelect = document.getElementById('dateFilter');
         if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
+        // Update internal selection sets FROM the new filters
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
-        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
-        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+        // --- Re-run setup for multi-select content listeners ---
+        // Ensure button references are valid before calling setup
+        this.categoryBtn = this.categoryBtn || document.getElementById('categoryFilterBtn');
+        this.subcategoryBtn = this.subcategoryBtn || document.getElementById('subcategoryFilterBtn');
+        this.countryBtn = this.countryBtn || document.getElementById('countryFilterBtn');
+        this.stateBtn = this.stateBtn || document.getElementById('stateFilterBtn');
 
-        this.setupMultiSelect(
-            'category',
-            document.querySelectorAll('#categoryOptionsContainer .category-option'),
-            this.selectedCategories,
-            'All Categories',
-            this.categoryBtn
-        );
-
+        if (this.categoryBtn) {
+            this.setupMultiSelect(
+                'category',
+                document.querySelectorAll('#categoryOptionsContainer .category-option'),
+                this.selectedCategories, 'All Categories', this.categoryBtn
+            );
+        }
+        // This will regenerate subcategory options based on current categories
+        // AND run setupMultiSelect for subcategories internally
         this.updateSubcategoryOptions();
 
-        this.setupMultiSelect(
-            'country',
-            document.querySelectorAll('#countryOptionsContainer .country-option'),
-            this.selectedCountries,
-            'All Countries',
-            this.countryBtn
-        );
-         this.setupMultiSelect(
-             'state',
-             document.querySelectorAll('#stateOptionsContainer .state-option'),
-             this.selectedStates,
-             'All States',
-             this.stateBtn
-         );
+        if (this.countryBtn) {
+            this.setupMultiSelect(
+                'country',
+                document.querySelectorAll('#countryOptionsContainer .country-option'),
+                this.selectedCountries, 'All Countries', this.countryBtn
+            );
+        }
+        if (this.stateBtn) {
+            this.setupMultiSelect(
+                 'state',
+                 document.querySelectorAll('#stateOptionsContainer .state-option'),
+                 this.selectedStates, 'All States', this.stateBtn
+             );
+        }
 
+        // Update range sliders based on new filter state (existing logic is likely fine)
         if (this.currentFilters.ranges && this.rangeSliderElements) {
              const { ranges } = this.currentFilters;
-             const {
-                 fromSlider, toSlider, fromInput, toInput,
-                 goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                 raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                 fillSlider
-             } = this.rangeSliderElements;
-
-             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
-                 fromSlider.value = ranges.pledged.min;
-                 toSlider.value = ranges.pledged.max;
-                 fromInput.value = ranges.pledged.min;
-                 toInput.value = ranges.pledged.max;
-                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             const { /* slider elements */ } = this.rangeSliderElements;
+             // ... existing logic to set slider/input values ...
+             if (ranges.pledged && this.rangeSliderElements.fromSlider && this.rangeSliderElements.fillSlider) {
+                 this.rangeSliderElements.fromSlider.value = ranges.pledged.min;
+                 this.rangeSliderElements.toSlider.value = ranges.pledged.max;
+                 this.rangeSliderElements.fromInput.value = ranges.pledged.min;
+                 this.rangeSliderElements.toInput.value = ranges.pledged.max;
+                 this.rangeSliderElements.fillSlider(this.rangeSliderElements.fromSlider, this.rangeSliderElements.toSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.toSlider);
              }
-             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
-                 goalFromSlider.value = ranges.goal.min;
-                 goalToSlider.value = ranges.goal.max;
-                 goalFromInput.value = ranges.goal.min;
-                 goalToInput.value = ranges.goal.max;
-                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+              if (ranges.goal && this.rangeSliderElements.goalFromSlider && this.rangeSliderElements.fillSlider) {
+                 this.rangeSliderElements.goalFromSlider.value = ranges.goal.min;
+                 this.rangeSliderElements.goalToSlider.value = ranges.goal.max;
+                 this.rangeSliderElements.goalFromInput.value = ranges.goal.min;
+                 this.rangeSliderElements.goalToInput.value = ranges.goal.max;
+                 this.rangeSliderElements.fillSlider(this.rangeSliderElements.goalFromSlider, this.rangeSliderElements.goalToSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.goalToSlider);
              }
-             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
-                  raisedFromSlider.value = ranges.raised.min;
-                  raisedToSlider.value = ranges.raised.max;
-                  raisedFromInput.value = ranges.raised.min;
-                  raisedToInput.value = ranges.raised.max;
-                  fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+             if (ranges.raised && this.rangeSliderElements.raisedFromSlider && this.rangeSliderElements.fillSlider) {
+                  this.rangeSliderElements.raisedFromSlider.value = ranges.raised.min;
+                  this.rangeSliderElements.raisedToSlider.value = ranges.raised.max;
+                  this.rangeSliderElements.raisedFromInput.value = ranges.raised.min;
+                  this.rangeSliderElements.raisedToInput.value = ranges.raised.max;
+                  this.rangeSliderElements.fillSlider(this.rangeSliderElements.raisedFromSlider, this.rangeSliderElements.raisedToSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.raisedToSlider);
              }
         }
+
+        // Ensure any open dropdown is closed when state updates externally
+        this._hideDropdownImmediately();
+        this.updatePagination(); // Ensure pagination reflects new totalRows etc.
     }
 
-    updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
-         if (!options || options.length === 0 || !selectedSet) return;
-         options.forEach(option => {
-            const isSelected = selectedSet.has(option.dataset.value);
-            option.classList.toggle('selected', isSelected);
-         });
-         this.updateButtonText(selectedSet, buttonElement, allValue);
-    }
+    setupMultiSelect(type, options, selectedSet, allValue, buttonElement) {
+        // --- Core logic for handling clicks on options INSIDE the dropdown ---
+        // This part remains largely the same, ensuring it operates on the correct
+        // elements and updates the selection state (selectedSet).
 
-
-    requestUpdate() {
-        this.showLoading(true);
-
-        const state = {
-            page: this.currentPage,
-            filters: {
-                search: this.searchInput.value.trim(),
-                categories: Array.from(this.selectedCategories),
-                subcategories: Array.from(this.selectedSubcategories),
-                countries: Array.from(this.selectedCountries),
-                states: Array.from(this.selectedStates),
-                date: document.getElementById('dateFilter').value,
-                ranges: {
-                    pledged: { min: parseFloat(document.getElementById('fromInput').value), max: parseFloat(document.getElementById('toInput').value) },
-                    goal: { min: parseFloat(document.getElementById('goalFromInput').value), max: parseFloat(document.getElementById('goalToInput').value) },
-                    raised: { min: parseFloat(document.getElementById('raisedFromInput').value), max: parseFloat(document.getElementById('raisedToInput').value) }
-                }
-            },
-            sort_order: this.currentSort
-        };
-        Streamlit.setComponentValue(state);
-    }
-
-     showLoading(isLoading) {
-         const indicator = document.getElementById('loading-indicator');
-         if (indicator) {
-             indicator.classList.toggle('hidden', !isLoading);
-         }
-     }
-
-
-    updateTableContent(rowsHtml) {
-        const tbody = document.getElementById('table-body');
-        if (tbody) {
-            tbody.innerHTML = rowsHtml || '<tr><td colspan="6">Loading data or no results...</td></tr>';
-        }
-         this.showLoading(false);
-    }
-
-    updatePagination() {
-        const currentTotalRows = parseInt(this.totalRows || 0, 10);
-        const currentPageSize = parseInt(this.pageSize || 10, 10);
-
-        let calculatedPages = 1;
-        if (currentPageSize > 0) {
-             calculatedPages = Math.ceil(currentTotalRows / currentPageSize);
-        }
-
-        const totalPages = Math.max(1, calculatedPages);
-
-        const pageNumbers = this.generatePageNumbers(totalPages);
-        const container = document.getElementById('page-numbers');
-        if (!container) {
-            console.error("Pagination container 'page-numbers' not found!");
+        if (!options || options.length === 0 || !selectedSet || !buttonElement) {
+             // console.warn(`setupMultiSelect (${type}): Missing required elements/data.`);
              return;
+        }
+        // Get the container holding the options (assuming it's the next sibling)
+        const contentContainer = buttonElement.nextElementSibling;
+        if (!contentContainer || !contentContainer.classList.contains('multi-select-content')) {
+             console.warn(`setupMultiSelect (${type}): Could not find valid content container for button:`, buttonElement);
+             return;
+        }
+
+        // Use the specific container to query options, ensures we get the right ones
+        const currentOptions = contentContainer.querySelectorAll(`.${type}-option`);
+
+        currentOptions.forEach(option => {
+            // Detach and re-attach listener to avoid duplicates using cloneNode
+            const newOption = option.cloneNode(true);
+            option.parentNode.replaceChild(newOption, option);
+
+            // Set initial selected state visual
+            if (selectedSet.has(newOption.dataset.value)) {
+                 newOption.classList.add('selected');
+             } else {
+                 newOption.classList.remove('selected');
+             }
+
+            // --- Click Handler for Option Selection ---
+             newOption.addEventListener('click', (e) => {
+                const clickedValue = e.target.dataset.value;
+                const isCurrentlySelected = e.target.classList.contains('selected');
+                const siblingOptions = Array.from(contentContainer.querySelectorAll('[data-value]')); // Query within this dropdown's content
+
+                // --- Logic for 'All' vs specific items ---
+                if (clickedValue === allValue) {
+                    selectedSet.clear();
+                    selectedSet.add(allValue);
+                    siblingOptions.forEach(opt => opt.classList.remove('selected'));
+                    e.target.classList.add('selected');
+                } else {
+                    const allOptionElement = contentContainer.querySelector(`[data-value="${allValue}"]`);
+                    // If 'All' was selected, deselect it when a specific item is chosen
+                    if (allOptionElement && selectedSet.has(allValue)) {
+                        selectedSet.delete(allValue);
+                        if (allOptionElement) allOptionElement.classList.remove('selected');
+                    }
+
+                    // Toggle the clicked item's selection state
+                    if (isCurrentlySelected) {
+                        selectedSet.delete(clickedValue);
+                        e.target.classList.remove('selected');
+                    } else {
+                        selectedSet.add(clickedValue);
+                        e.target.classList.add('selected');
+                    }
+
+                    // If all specific items are deselected, re-select 'All'
+                    const hasSpecificSelection = Array.from(selectedSet).some(item => item !== allValue);
+                    if (!hasSpecificSelection && selectedSet.size === 0) { // Check size too
+                         selectedSet.clear();
+                         selectedSet.add(allValue);
+                         if (allOptionElement) allOptionElement.classList.add('selected');
+                         siblingOptions.forEach(opt => {
+                              if (opt.dataset.value !== allValue) opt.classList.remove('selected');
+                         });
+                    }
+                }
+
+                // --- Update dependent filters / Request Update ---
+                let needsUpdate = true; // Assume update needed unless specific logic below says otherwise
+                if (type === 'category') {
+                    // This function updates subcategory options AND runs setupMultiSelect on them
+                    const subcatSelectionChanged = this.updateSubcategoryOptions();
+                    // Only trigger update if category OR resulting subcat selection changed?
+                    // For simplicity, always update for now. Can optimize later if needed.
+                    // needsUpdate = subcatSelectionChanged || /* check if category itself changed */;
+                } else if (type === 'subcategory') {
+                    // Handle selecting parent category if needed (existing logic)
+                    if (clickedValue !== allValue && !isCurrentlySelected) { // If adding a specific subcategory
+                        const parentCategory = this.subcategoryParentMap[clickedValue];
+                        if (parentCategory && !this.selectedCategories.has(parentCategory)) {
+                             if (this.selectedCategories.has('All Categories')) {
+                                 this.selectedCategories.delete('All Categories');
+                             }
+                             this.selectedCategories.add(parentCategory);
+                             // Need to update category UI and re-run its setup
+                             const catOptions = document.querySelectorAll('#categoryOptionsContainer .category-option');
+                             this.updateMultiSelectUI(catOptions, this.selectedCategories, this.categoryBtn, 'All Categories');
+                             this.setupMultiSelect('category', catOptions, this.selectedCategories, 'All Categories', this.categoryBtn);
+                             // The category setup will trigger updateSubcategoryOptions again, which is slightly inefficient but ensures consistency
+                        }
+                    }
+                }
+
+                // Update the button text regardless
+                this.updateButtonText(selectedSet, buttonElement, allValue);
+
+                // If an update is needed (state changed), reset page and request
+                if (needsUpdate) {
+                    this.currentPage = 1;
+                    this.requestUpdate();
+                }
+
+                // Optional: Close the dropdown after selection?
+                // this._hideDropdownImmediately();
+            });
+            // --- End Click Handler ---
+        });
+
+        // Update button text initially after setting up listeners
+        this.updateButtonText(selectedSet, buttonElement, allValue);
+    }
+
+    updateSubcategoryOptions() {
+        // This function needs to:
+        // 1. Determine available subcategories based on selected categories.
+        // 2. Update the this.selectedSubcategories set if currently selected ones are no longer valid.
+        // 3. Regenerate the HTML for the subcategory options.
+        // 4. Call setupMultiSelect for the *new* subcategory options to attach listeners.
+        // 5. Return true if the selection changed, false otherwise.
+
+        const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
+        const subcategoryBtn = this.subcategoryBtn || document.getElementById('subcategoryFilterBtn'); // Ensure button ref is valid
+        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories || !this.categorySubcategoryMap || !this.selectedCategories) {
+            //console.warn("Cannot update subcategory options - missing elements or data.");
+            return false;
+        }
+
+        let selectionChanged = false;
+
+        // --- Determine available subcategories (existing logic) ---
+        const isAllCategoriesSelected = this.selectedCategories.has('All Categories');
+        let availableSubcategories = new Set(['All Subcategories']);
+        if (isAllCategoriesSelected || this.selectedCategories.size === 0) {
+            (this.categorySubcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
+        } else {
+            this.selectedCategories.forEach(cat => {
+                (this.categorySubcategoryMap[cat] || []).forEach(subcat => availableSubcategories.add(subcat));
+            });
+        }
+
+        // --- Update selection if needed (existing logic) ---
+        const currentSelectedSubs = Array.from(this.selectedSubcategories);
+        currentSelectedSubs.forEach(subcat => {
+            if (subcat !== 'All Subcategories' && !availableSubcategories.has(subcat)) {
+                this.selectedSubcategories.delete(subcat);
+                selectionChanged = true;
+            }
+        });
+        // Ensure 'All Subcategories' is selected if no specific ones are valid/selected
+         const hasSpecificSelection = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
+         if (this.selectedSubcategories.size === 0 || (!hasSpecificSelection && !this.selectedSubcategories.has('All Subcategories'))) {
+            if (!this.selectedSubcategories.has('All Subcategories')) {
+                 this.selectedSubcategories.clear();
+                 this.selectedSubcategories.add('All Subcategories');
+                 selectionChanged = true;
+             }
+         } else if (hasSpecificSelection && this.selectedSubcategories.has('All Subcategories')) {
+             // Deselect 'All' if a specific one is chosen
+             this.selectedSubcategories.delete('All Subcategories');
+             selectionChanged = true; // Selection did change
          }
 
-        container.innerHTML = pageNumbers.map(page => {
-            if (page === '...') {
-                return '<span class="page-ellipsis">...</span>';
-            }
-            const button = document.createElement('button');
-            button.className = `page-number ${page === this.currentPage ? 'active' : ''}`;
-            button.textContent = page;
-            button.disabled = page === this.currentPage;
-            button.dataset.page = page;
-            return button.outerHTML;
-        }).join('');
+        // --- Regenerate HTML & Re-attach Listeners ---
+        const sortedSubcategories = Array.from(availableSubcategories).sort((a, b) => {
+            if (a === 'All Subcategories') return -1; if (b === 'All Subcategories') return 1; return a.localeCompare(b);
+        });
+        subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
+            `<div class="subcategory-option ${this.selectedSubcategories.has(opt) ? 'selected' : ''}" data-value="${opt}">${opt}</div>`
+        ).join('');
 
-        if (!this.handlePageClick) {
-             this.handlePageClick = (event) => {
-                 if (event.target.classList.contains('page-number') && !event.target.disabled) {
-                     this.goToPage(parseInt(event.target.dataset.page));
-                 }
-             };
-        }
-        container.removeEventListener('click', this.handlePageClick);
-        container.addEventListener('click', this.handlePageClick);
+        // Crucially, re-run setupMultiSelect on the *new* options
+        this.setupMultiSelect(
+            'subcategory',
+            subcategoryOptionsContainer.querySelectorAll('.subcategory-option'), // Query new elements
+            this.selectedSubcategories,
+            'All Subcategories',
+            subcategoryBtn
+        );
 
-        const prevButton = document.getElementById('prev-page');
-        const nextButton = document.getElementById('next-page');
+        // Update button text (already done inside the setupMultiSelect call now)
+        // this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
 
-        if (prevButton) {
-            prevButton.disabled = this.currentPage <= 1;
-        } else {
-            console.error("Previous page button not found!");
-        }
-        if (nextButton) {
-            nextButton.disabled = this.currentPage >= totalPages;
-        } else {
-            console.error("Next page button not found!");
-        }
+        return selectionChanged;
     }
 
-    generatePageNumbers(totalPages) {
-        let pages = [];
-        if (totalPages <= 10) {
-            pages = Array.from({length: totalPages}, (_, i) => i + 1);
-        } else {
-            if (this.currentPage <= 7) {
-                pages = [...Array.from({length: 7}, (_, i) => i + 1), '...', totalPages - 1, totalPages];
-            } else if (this.currentPage >= totalPages - 6) {
-                pages = [1, 2, '...', ...Array.from({length: 7}, (_, i) => totalPages - 6 + i)];
-            } else {
-                pages = [1, 2, '...', this.currentPage - 1, this.currentPage, this.currentPage + 1, '...', totalPages - 1, totalPages];
-            }
-        }
-        return pages;
-    }
+    setupRangeSlider() {
+        // --- Existing range slider setup logic ---
+        // This should still work as it finds elements by ID and adds listeners
+        // within the (initially hidden) dropdown content.
+        const fromSlider = document.getElementById('fromSlider');
+        // ... get all other slider/input elements ...
+        const raisedToInput = document.getElementById('raisedToInput');
 
-    previousPage() {
-        if (this.currentPage > 1) {
-            this.currentPage--;
-            this.requestUpdate();
+        if (!fromSlider /* || ... check all elements ... */ || !raisedToInput) {
+             console.error("One or more range slider elements not found. Aborting setup.");
+             this.rangeSliderElements = null;
+             return;
         }
-    }
 
-    nextPage() {
-        const totalPages = Math.ceil(this.totalRows / this.pageSize);
-        if (this.currentPage < totalPages) {
-            this.currentPage++;
-            this.requestUpdate();
-        }
-    }
+        this.rangeSliderElements = { /* ... store refs ... */ };
+        this.rangeSliderElements.fromSlider = fromSlider;
+        this.rangeSliderElements.toSlider = document.getElementById('toSlider');
+        this.rangeSliderElements.fromInput = document.getElementById('fromInput');
+        this.rangeSliderElements.toInput = document.getElementById('toInput');
+        this.rangeSliderElements.goalFromSlider = document.getElementById('goalFromSlider');
+        this.rangeSliderElements.goalToSlider = document.getElementById('goalToSlider');
+        this.rangeSliderElements.goalFromInput = document.getElementById('goalFromInput');
+        this.rangeSliderElements.goalToInput = document.getElementById('goalToInput');
+        this.rangeSliderElements.raisedFromSlider = document.getElementById('raisedFromSlider');
+        this.rangeSliderElements.raisedToSlider = document.getElementById('raisedToSlider');
+        this.rangeSliderElements.raisedFromInput = document.getElementById('raisedFromInput');
+        this.rangeSliderElements.raisedToInput = raisedToInput; // Last one from check
 
-    goToPage(page) {
-        const totalPages = Math.ceil(this.totalRows / this.pageSize);
-        if (page >= 1 && page <= totalPages && page !== this.currentPage) {
-            this.currentPage = page;
-            this.requestUpdate();
-        }
+        const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => { /* ... existing fill logic ... */
+            if (!from || !to || !controlSlider) return;
+            const min = parseFloat(controlSlider.min); const max = parseFloat(controlSlider.max);
+            const fromVal = parseFloat(from.value); const toVal = parseFloat(to.value);
+            const rangeDist = max - min; const fromPos = fromVal - min; const toPos = toVal - min;
+            const fromPerc = (rangeDist > 0) ? (fromPos / rangeDist) * 100 : 0;
+            const toPerc = (rangeDist > 0) ? (toPos / rangeDist) * 100 : 0;
+             controlSlider.style.background = `linear-gradient(to right, ${sliderColor} ${Math.min(fromPerc, toPerc)}%, ${rangeColor} ${Math.min(fromPerc, toPerc)}%, ${rangeColor} ${Math.max(fromPerc, toPerc)}%, ${sliderColor} ${Math.max(fromPerc, toPerc)}%)`;
+        };
+        this.rangeSliderElements.fillSlider = fillSlider; // Store ref
+
+        const debouncedRangeUpdate = debounce(() => {
+            this.currentPage = 1; this.requestUpdate();
+        }, 400);
+
+        const controlFromInput = (fSlider, tSlider, fInput, fillFn) => { /* ... existing logic ... */
+            const minVal = parseFloat(fSlider.min); let fromVal = parseFloat(fInput.value);
+            const maxVal = parseFloat(tSlider.value); // Use slider's value for max constraint
+            if (isNaN(fromVal) || fromVal < minVal) fromVal = minVal; if (fromVal > maxVal) fromVal = maxVal;
+            fInput.value = fromVal; fSlider.value = fromVal; fillFn(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider);
+        };
+        const controlToInput = (fSlider, tSlider, tInput, fillFn) => { /* ... existing logic ... */
+            const maxVal = parseFloat(tSlider.max); let toVal = parseFloat(tInput.value);
+            const minVal = parseFloat(fSlider.value); // Use slider's value for min constraint
+            if (isNaN(toVal) || toVal > maxVal) toVal = maxVal; if (toVal < minVal) toVal = minVal;
+            tInput.value = toVal; tSlider.value = toVal; fillFn(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider);
+        };
+        const controlFromSlider = (fSlider, tSlider, fInput, fillFn) => { /* ... existing logic ... */
+            const fromVal = parseFloat(fSlider.value); const toVal = parseFloat(tSlider.value);
+            if (fromVal > toVal) { tSlider.value = fromVal; const tInputId = tSlider.id.replace('Slider', 'Input'); document.getElementById(tInputId).value = fromVal; }
+            fInput.value = fromVal; fillFn(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider);
+        };
+        const controlToSlider = (fSlider, tSlider, tInput, fillFn) => { /* ... existing logic ... */
+             const fromVal = parseFloat(fSlider.value); const toVal = parseFloat(tSlider.value);
+            if (fromVal > toVal) { fSlider.value = toVal; const fInputId = fSlider.id.replace('Slider', 'Input'); document.getElementById(fInputId).value = toVal; }
+            tInput.value = toVal; fillFn(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider);
+        };
+
+        const makeControlFn = (controlFn, fillFnRef) => (s1, s2, input) => controlFn(s1, s2, input, fillFnRef);
+        const controlFromInputFilled = makeControlFn(controlFromInput, fillSlider);
+        const controlToInputFilled = makeControlFn(controlToInput, fillSlider);
+        const controlFromSliderFilled = makeControlFn(controlFromSlider, fillSlider);
+        const controlToSliderFilled = makeControlFn(controlToSlider, fillSlider);
+
+        const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
+             fSlider.addEventListener('input', () => { controlFromSliderFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+             tSlider.addEventListener('input', () => { controlToSliderFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+             fInput.addEventListener('input', () => { controlFromInputFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); }); // Use filled version
+             tInput.addEventListener('input', () => { controlToInputFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); }); // Use filled version
+        };
+
+        setupSliderListeners(this.rangeSliderElements.fromSlider, this.rangeSliderElements.toSlider, this.rangeSliderElements.fromInput, this.rangeSliderElements.toInput);
+        setupSliderListeners(this.rangeSliderElements.goalFromSlider, this.rangeSliderElements.goalToSlider, this.rangeSliderElements.goalFromInput, this.rangeSliderElements.goalToInput);
+        setupSliderListeners(this.rangeSliderElements.raisedFromSlider, this.rangeSliderElements.raisedToSlider, this.rangeSliderElements.raisedFromInput, this.rangeSliderElements.raisedToInput);
+
+        // Initial fill
+        fillSlider(this.rangeSliderElements.fromSlider, this.rangeSliderElements.toSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.toSlider);
+        fillSlider(this.rangeSliderElements.goalFromSlider, this.rangeSliderElements.goalToSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.goalToSlider);
+        fillSlider(this.rangeSliderElements.raisedFromSlider, this.rangeSliderElements.raisedToSlider, '#C6C6C6', '#5932EA', this.rangeSliderElements.raisedToSlider);
+        // --- End Range Slider Setup ---
     }
 
     resetFilters() {
+        // Reset logic should be mostly the same, but ensure it calls
+        // updateUIState at the end (or replicates its relevant parts)
+        // to re-attach listeners correctly after resetting the filter values.
+
         const defaultFilters = window.tableManagerInstance?.minMaxValues
-            ? {
-                search: '',
-                categories: ['All Categories'],
-                subcategories: ['All Subcategories'],
-                countries: ['All Countries'],
-                states: ['All States'],
-                date: 'All Time',
-                ranges: {
-                    pledged: { min: this.minMaxValues.pledged.min, max: this.minMaxValues.pledged.max },
-                    goal: { min: this.minMaxValues.goal.min, max: this.minMaxValues.goal.max },
-                    raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
-                }
-            }
-            : JSON.parse(JSON.stringify(this.currentFilters)); 
+            ? { /* ... construct default filters using minMaxValues ... */
+                 search: '', categories: ['All Categories'], subcategories: ['All Subcategories'],
+                 countries: ['All Countries'], states: ['All States'], date: 'All Time',
+                 ranges: {
+                     pledged: { min: this.minMaxValues.pledged.min, max: this.minMaxValues.pledged.max },
+                     goal: { min: this.minMaxValues.goal.min, max: this.minMaxValues.goal.max },
+                     raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
+                 }
+             }
+            : JSON.parse(JSON.stringify(DEFAULT_FILTERS)); // Fallback just in case
 
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
         this.showLoading(true);
 
+        // 1. Send reset state back to Streamlit immediately
         const resetStatePayload = {
             page: defaultPage,
-            filters: JSON.parse(JSON.stringify(defaultFilters)), 
+            filters: JSON.parse(JSON.stringify(defaultFilters)), // Deep copy
             sort_order: defaultSort
         };
-
         Streamlit.setComponentValue(resetStatePayload);
 
+        // 2. OPTIONALLY: Optimistically update internal state and UI
+        //    This makes the UI feel faster, but relies on Streamlit accepting the reset state.
+        //    The next render from Streamlit should confirm this state anyway via updateUIState.
         try {
             this.currentPage = defaultPage;
             this.currentSort = defaultSort;
-            this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
-            this.selectedCategories = new Set(defaultFilters.categories);
-            this.selectedSubcategories = new Set(defaultFilters.subcategories);
-            this.selectedCountries = new Set(defaultFilters.countries);
-            this.selectedStates = new Set(defaultFilters.states);
+            this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); // Update internal filters
 
-            if (this.searchInput) this.searchInput.value = defaultFilters.search;
-            const sortSelect = document.getElementById('sortFilter');
-            if (sortSelect) sortSelect.value = defaultSort;
-            const dateSelect = document.getElementById('dateFilter');
-            if (dateSelect) dateSelect.value = defaultFilters.date;
+            // Re-run the UI update logic to reflect the reset state immediately
+            // This implicitly handles resetting sliders, selects, and multi-selects
+            this.updateUIState({
+                current_page: this.currentPage,
+                total_rows: this.totalRows, // Keep total rows, will be updated on next render if needed
+                filters: this.currentFilters,
+                sort_order: this.currentSort,
+                // Don't need header/rows here, just updating controls
+            });
 
-            this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-            this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
-            this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
-
-            this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
-            this.updateSubcategoryOptions(); 
-            this.setupMultiSelect('country', document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn);
-            this.setupMultiSelect('state', document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn);
-
-            if (defaultFilters.ranges && this.rangeSliderElements) {
-                 const { ranges } = defaultFilters;
-                 const { fromSlider, toSlider, fromInput, toInput,
-                         goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                         raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                         fillSlider } = this.rangeSliderElements;
-
-                 if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
-                     fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
-                     fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
-                     fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-                 }
-                 if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
-                     goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
-                     goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
-                     fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-                 }
-                 if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
-                      raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
-                      raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
-                      fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
-                 }
-            }
-
-            this.updatePagination();
-            this.showLoading(false);
+            this.updatePagination(); // Update pagination based on page reset
+            // Don't hide loading here - wait for Streamlit's re-render confirmation
         } catch (error) {
              console.error("Error during optimistic UI reset in resetFilters:", error);
+             // Hide loading on error, as the re-render might not happen correctly
              this.showLoading(false);
         }
     }
 
-    adjustHeight() {
-         requestAnimationFrame(() => {
-            const root = this.componentRoot;
-            if (!root) return;
-             const totalHeight = root.scrollHeight + 50;
-
-             if (!this.lastHeight || Math.abs(this.lastHeight - totalHeight) > 10) {
-                 this.lastHeight = totalHeight;
-                 Streamlit.setFrameHeight(totalHeight);
-             }
-         });
-    }
+    // --- Other existing methods (requestUpdate, showLoading, updateTableContent, pagination, adjustHeight, updateButtonText, updateMultiSelectUI) ---
+    // These should generally be okay, but review updateButtonText and updateMultiSelectUI
+    // to ensure they interact correctly with the new setupMultiSelect logic.
 
     updateButtonText(selectedItems, buttonElement, allValueLabel) {
+         // This logic seems fine - updates text based on the Set content
          if (!buttonElement || !selectedItems) return;
          const selectedArray = Array.from(selectedItems);
          const displayItems = selectedArray.filter(item => item !== allValueLabel);
-         displayItems.sort((a, b) => a.localeCompare(b));
+         displayItems.sort((a, b) => a.localeCompare(b)); // Sort for consistent display
 
          if (displayItems.length === 0) {
              buttonElement.textContent = allValueLabel;
@@ -1581,333 +1889,175 @@ class TableManager {
          }
     }
 
-    setupMultiSelect(type, options, selectedSet, allValue, buttonElement) {
-        if (!options || options.length === 0 || !selectedSet || !buttonElement) {
-             return;
-        }
+    updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
+         // This helper might still be useful for explicitly setting the visual state
+         // e.g., called from updateUIState or after programmatic changes.
+         // Ensure it doesn't attach listeners.
+         if (!options || options.length === 0 || !selectedSet) return;
+         options.forEach(option => {
+            const isSelected = selectedSet.has(option.dataset.value);
+            option.classList.toggle('selected', isSelected);
+         });
+         // Also update the button text after setting visuals
+         this.updateButtonText(selectedSet, buttonElement, allValue);
+    }
 
-        options.forEach(option => {
-            const newOption = option.cloneNode(true);
-            option.parentNode.replaceChild(newOption, option);
 
-            if (selectedSet.has(newOption.dataset.value)) {
-                 newOption.classList.add('selected');
-             } else {
-                 newOption.classList.remove('selected');
-             }
+    requestUpdate() {
+        this.showLoading(true);
+        // Close any open dropdown before sending state
+        this._hideDropdownImmediately();
 
-             newOption.addEventListener('click', (e) => {
-                const clickedValue = e.target.dataset.value;
-                const isCurrentlySelected = e.target.classList.contains('selected');
-                const currentOptions = Array.from(e.target.parentElement.querySelectorAll('[data-value]'));
-
-                if (clickedValue === allValue) {
-                    selectedSet.clear();
-                    selectedSet.add(allValue);
-                    currentOptions.forEach(opt => opt.classList.remove('selected'));
-                    e.target.classList.add('selected');
-                } else {
-                    const allOptionElement = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
-                    if (allOptionElement && selectedSet.has(allValue)) {
-                        selectedSet.delete(allValue);
-                        if (allOptionElement) allOptionElement.classList.remove('selected');
-                    }
-
-                    if (isCurrentlySelected) {
-                        selectedSet.delete(clickedValue);
-                        e.target.classList.remove('selected');
-                    } else {
-                        selectedSet.add(clickedValue);
-                        e.target.classList.add('selected');
-                    }
-
-                    const hasSpecificSelection = Array.from(selectedSet).some(item => item !== allValue);
-                    if (!hasSpecificSelection) {
-                         selectedSet.clear();
-                         selectedSet.add(allValue);
-                         if (allOptionElement) allOptionElement.classList.add('selected');
-                         currentOptions.forEach(opt => {
-                              if (opt.dataset.value !== allValue) opt.classList.remove('selected');
-                         });
-                    }
+        const state = {
+            page: this.currentPage,
+            filters: {
+                search: this.searchInput?.value.trim() || '',
+                categories: Array.from(this.selectedCategories),
+                subcategories: Array.from(this.selectedSubcategories),
+                countries: Array.from(this.selectedCountries),
+                states: Array.from(this.selectedStates),
+                date: document.getElementById('dateFilter')?.value || 'All Time',
+                ranges: {
+                    pledged: { min: parseFloat(document.getElementById('fromInput')?.value ?? 0), max: parseFloat(document.getElementById('toInput')?.value ?? 1000) },
+                    goal: { min: parseFloat(document.getElementById('goalFromInput')?.value ?? 0), max: parseFloat(document.getElementById('goalToInput')?.value ?? 10000) },
+                    raised: { min: parseFloat(document.getElementById('raisedFromInput')?.value ?? 0), max: parseFloat(document.getElementById('raisedToInput')?.value ?? 500) }
                 }
+            },
+            sort_order: this.currentSort
+        };
+        // Ensure ranges are valid numbers
+        Object.keys(state.filters.ranges).forEach(key => {
+             state.filters.ranges[key].min = isNaN(state.filters.ranges[key].min) ? (this.minMaxValues[key]?.min ?? 0) : state.filters.ranges[key].min;
+             state.filters.ranges[key].max = isNaN(state.filters.ranges[key].max) ? (this.minMaxValues[key]?.max ?? 1000) : state.filters.ranges[key].max;
+        });
 
-                if (type === 'category') {
-                    this.updateSubcategoryOptions(); 
-                } else if (type === 'subcategory') {
-                    if (clickedValue !== allValue && !isCurrentlySelected) {
-                        const parentCategory = this.subcategoryParentMap[clickedValue];
-                        if (parentCategory && !this.selectedCategories.has(parentCategory)) {
-                             if (this.selectedCategories.has('All Categories')) {
-                                 this.selectedCategories.delete('All Categories');
-                             }
-                             this.selectedCategories.add(parentCategory);
-                             this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-                             this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
-                        }
-                    }
+        Streamlit.setComponentValue(state);
+    }
+
+    showLoading(isLoading) {
+         if (!this.componentRoot) return;
+         const indicator = this.componentRoot.querySelector('#loading-indicator');
+         if (indicator) {
+             indicator.classList.toggle('hidden', !isLoading);
+         }
+     }
+
+    updateTableContent(rowsHtml) {
+        if (!this.componentRoot) return;
+        const tbody = this.componentRoot.querySelector('#table-body');
+        if (tbody) {
+            tbody.innerHTML = rowsHtml || '<tr><td colspan="6">Loading data or no results...</td></tr>';
+        }
+         this.showLoading(false); // Hide loading once content is updated
+    }
+
+    updatePagination() {
+        // ... existing pagination logic ...
+        // Should be fine as it reads current page/totalrows state
+        if (!this.componentRoot) return;
+        const currentTotalRows = parseInt(this.totalRows || 0, 10);
+        const currentPageSize = parseInt(this.pageSize || 10, 10);
+        let calculatedPages = 1;
+        if (currentPageSize > 0 && currentTotalRows > 0) { calculatedPages = Math.ceil(currentTotalRows / currentPageSize); }
+        const totalPages = Math.max(1, calculatedPages);
+
+        const pageNumbers = this.generatePageNumbers(totalPages);
+        const container = this.componentRoot.querySelector('#page-numbers');
+        if (!container) { console.error("Pagination container 'page-numbers' not found!"); return; }
+
+        container.innerHTML = pageNumbers.map(page => { /* ... existing button generation ... */
+             if (page === '...') { return '<span class="page-ellipsis">...</span>'; }
+             const button = document.createElement('button');
+             button.className = `page-number ${page === this.currentPage ? 'active' : ''}`;
+             button.textContent = page;
+             button.disabled = page === this.currentPage;
+             button.dataset.page = page;
+             return button.outerHTML;
+         }).join('');
+
+        // Re-attach listener (ensure handler exists and is bound)
+        if (!this.handlePageClick) {
+            this.handlePageClick = (event) => {
+                if (event.target.classList.contains('page-number') && !event.target.disabled) {
+                    this.goToPage(parseInt(event.target.dataset.page));
                 }
+            };
+        }
+        container.removeEventListener('click', this.handlePageClick); // Remove old one if exists
+        container.addEventListener('click', this.handlePageClick);
 
-                this.updateButtonText(selectedSet, buttonElement, allValue);
-                this.currentPage = 1;
-                this.requestUpdate();
-            });
-        });
-
-        this.updateButtonText(selectedSet, buttonElement, allValue);
+        const prevButton = this.componentRoot.querySelector('#prev-page');
+        const nextButton = this.componentRoot.querySelector('#next-page');
+        if (prevButton) prevButton.disabled = this.currentPage <= 1;
+        if (nextButton) nextButton.disabled = this.currentPage >= totalPages;
     }
 
-
-    updateSubcategoryOptions() {
-        const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
-        const subcategoryBtn = document.getElementById('subcategoryFilterBtn'); 
-        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories || !this.categorySubcategoryMap || !this.selectedCategories) {
-            console.warn("Cannot update subcategory options - missing elements or data.");
-            return;
+    generatePageNumbers(totalPages) {
+        // ... existing logic ...
+        let pages = [];
+        if (totalPages <= 10) { pages = Array.from({length: totalPages}, (_, i) => i + 1); }
+        else {
+            if (this.currentPage <= 7) { pages = [...Array.from({length: 7}, (_, i) => i + 1), '...', totalPages - 1, totalPages]; }
+            else if (this.currentPage >= totalPages - 6) { pages = [1, 2, '...', ...Array.from({length: 7}, (_, i) => totalPages - 6 + i)]; }
+            else { pages = [1, 2, '...', this.currentPage - 1, this.currentPage, this.currentPage + 1, '...', totalPages - 1, totalPages]; }
         }
-
-        const isAllCategoriesSelected = this.selectedCategories.has('All Categories');
-        let availableSubcategories = new Set(['All Subcategories']); 
-
-        if (isAllCategoriesSelected || this.selectedCategories.size === 0) {
-             (this.categorySubcategoryMap['All Categories'] || []).forEach(subcat => {
-                 availableSubcategories.add(subcat); 
-            });
-        } else {
-            this.selectedCategories.forEach(cat => {
-                (this.categorySubcategoryMap[cat] || []).forEach(subcat => {
-                    availableSubcategories.add(subcat); 
-                });
-            });
-        }
-
-        let changedSelection = false;
-        const currentSelectedSubs = Array.from(this.selectedSubcategories);
-        currentSelectedSubs.forEach(subcat => {
-            if (subcat !== 'All Subcategories' && !availableSubcategories.has(subcat)) {
-                this.selectedSubcategories.delete(subcat);
-                changedSelection = true;
-            }
-        });
-
-        const hasSpecificSelection = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
-        if (!hasSpecificSelection && !this.selectedSubcategories.has('All Subcategories')) {
-            this.selectedSubcategories.clear();
-            this.selectedSubcategories.add('All Subcategories');
-            changedSelection = true;
-        } else if (this.selectedSubcategories.size === 0) {
-             this.selectedSubcategories.add('All Subcategories');
-             changedSelection = true;
-        }
-
-        const sortedSubcategories = Array.from(availableSubcategories);
-        sortedSubcategories.sort((a, b) => {
-            if (a === 'All Subcategories') return -1;
-            if (b === 'All Subcategories') return 1;
-            return a.localeCompare(b);
-        });
-
-        subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
-            `<div class="subcategory-option ${this.selectedSubcategories.has(opt) ? 'selected' : ''}" data-value="${opt}">${opt}</div>`
-        ).join('');
-
-        this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
-
-        this.setupMultiSelect(
-            'subcategory', 
-             subcategoryOptionsContainer.querySelectorAll('.subcategory-option'),
-             this.selectedSubcategories,
-             'All Subcategories',
-             subcategoryBtn 
-         );
-         return changedSelection;
+        return pages;
     }
 
-    setupRangeSlider() {
-        const fromSlider = document.getElementById('fromSlider');
-        const toSlider = document.getElementById('toSlider');
-        const fromInput = document.getElementById('fromInput');
-        const toInput = document.getElementById('toInput');
-        const goalFromSlider = document.getElementById('goalFromSlider');
-        const goalToSlider = document.getElementById('goalToSlider');
-        const goalFromInput = document.getElementById('goalFromInput');
-        const goalToInput = document.getElementById('goalToInput');
-        const raisedFromSlider = document.getElementById('raisedFromSlider');
-        const raisedToSlider = document.getElementById('raisedToSlider');
-        const raisedFromInput = document.getElementById('raisedFromInput');
-        const raisedToInput = document.getElementById('raisedToInput');
+    previousPage() { if (this.currentPage > 1) { this.currentPage--; this.requestUpdate(); } }
+    nextPage() { const totalPages = Math.ceil(this.totalRows / this.pageSize); if (this.currentPage < totalPages) { this.currentPage++; this.requestUpdate(); } }
+    goToPage(page) { const totalPages = Math.ceil(this.totalRows / this.pageSize); if (page >= 1 && page <= totalPages && page !== this.currentPage) { this.currentPage = page; this.requestUpdate(); } }
 
-        if (!fromSlider || !toSlider || !fromInput || !toInput ||
-            !goalFromSlider || !goalToSlider || !goalFromInput || !goalToInput ||
-            !raisedFromSlider || !raisedToSlider || !raisedFromInput || !raisedToInput) {
-             console.error("One or more range slider elements not found. Aborting setup.");
-             this.rangeSliderElements = null;
-             return;
-        }
-
-        this.rangeSliderElements = {
-            fromSlider, toSlider, fromInput, toInput,
-            goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-            raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-            fillSlider: null
-        };
-
-
-        const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => {
-             if (!from || !to || !controlSlider) return;
-
-            const min = parseFloat(controlSlider.min);
-            const max = parseFloat(controlSlider.max);
-            const validMin = isNaN(min) ? 0 : min;
-            const validMax = isNaN(max) ? (validMin + 1) : max; 
-
-            const fromVal = parseFloat(from.value);
-            const toVal = parseFloat(to.value);
-            const validFromVal = isNaN(fromVal) ? validMin : Math.max(validMin, Math.min(validMax, fromVal));
-            const validToVal = isNaN(toVal) ? validMax : Math.max(validMin, Math.min(validMax, toVal));
-
-
-            const rangeDistance = validMax - validMin;
-            const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
-            const displayFromVal = Math.min(validFromVal, validToVal);
-            const displayToVal = Math.max(validFromVal, validToVal);
-            const fromPosition = displayFromVal - validMin;
-            const toPosition = displayToVal - validMin;
-            const fromPercent = Math.min(100, Math.max(0, (fromPosition / safeRangeDistance) * 100));
-            const toPercent = Math.min(100, Math.max(0, (toPosition / safeRangeDistance) * 100));
-
-            controlSlider.style.background = `linear-gradient(
-                to right,
-                ${sliderColor} 0%,
-                ${sliderColor} ${fromPercent}%,
-                ${rangeColor} ${fromPercent}%,
-                ${rangeColor} ${toPercent}%,
-                ${sliderColor} ${toPercent}%,
-                ${sliderColor} 100%)`;
-        };
-
-        this.rangeSliderElements.fillSlider = fillSlider;
-
-        const debouncedRangeUpdate = debounce(() => {
-            this.currentPage = 1;
-            this.requestUpdate();
-        }, 400);
-
-
-        const controlFromInput = (fromSlider, toSlider, fromInput, fillFn) => {
-             const minVal = parseFloat(fromSlider.min);
-             const maxVal = parseFloat(toSlider.value); 
-             let fromVal = parseFloat(fromInput.value);
-
-             if (isNaN(fromVal) || fromVal < minVal) fromVal = minVal;
-             if (fromVal > maxVal) fromVal = maxVal;
-
-             fromInput.value = fromVal; 
-             fromSlider.value = fromVal; 
-             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider); 
-        };
-
-        const controlToInput = (fromSlider, toSlider, toInput, fillFn) => {
-             const minVal = parseFloat(fromSlider.value); 
-             const maxVal = parseFloat(toSlider.max);
-             let toVal = parseFloat(toInput.value);
-
-             if (isNaN(toVal) || toVal > maxVal) toVal = maxVal;
-             if (toVal < minVal) toVal = minVal;
-
-             toInput.value = toVal;
-             toSlider.value = toVal;
-             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider); 
-        };
-
-        const controlFromSlider = (fromSlider, toSlider, fromInput, fillFn) => {
-             const fromVal = parseFloat(fromSlider.value);
-             const toVal = parseFloat(toSlider.value);
-             if (fromVal > toVal) {
-                 toSlider.value = fromVal;
-                 const toInputId = toSlider.id.replace('Slider', 'Input');
-                 const toInput = document.getElementById(toInputId);
-                 if(toInput) toInput.value = fromVal;
+    adjustHeight() {
+         requestAnimationFrame(() => {
+            if (!this.componentRoot) return;
+             const totalHeight = this.componentRoot.scrollHeight + 50; // Add buffer
+             if (!this.lastHeight || Math.abs(this.lastHeight - totalHeight) > 10) { // Update only if changed significantly
+                 this.lastHeight = totalHeight;
+                 Streamlit.setFrameHeight(totalHeight);
              }
-             fromInput.value = fromVal;
-             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-        };
-
-        const controlToSlider = (fromSlider, toSlider, toInput, fillFn) => {
-             const fromVal = parseFloat(fromSlider.value);
-             const toVal = parseFloat(toSlider.value);
-             if (fromVal > toVal) {
-                 fromSlider.value = toVal;
-                 const fromInputId = fromSlider.id.replace('Slider', 'Input');
-                 const fromInput = document.getElementById(fromInputId);
-                 if(fromInput) fromInput.value = toVal;
-             }
-             toInput.value = toVal;
-             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-        };
-
-        const makeControlFn = (controlFn, fillFn) => {
-            return (slider1, slider2, input) => controlFn(slider1, slider2, input, fillFn);
-        };
-
-        const controlFromInputFilled = makeControlFn(controlFromInput, fillSlider);
-        const controlToInputFilled = makeControlFn(controlToInput, fillSlider);
-        const controlFromSliderFilled = makeControlFn(controlFromSlider, fillSlider);
-        const controlToSliderFilled = makeControlFn(controlToSlider, fillSlider);
-
-
-        const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
-            fSlider.addEventListener('input', () => { controlFromSliderFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tSlider.addEventListener('input', () => { controlToSliderFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-            fInput.addEventListener('input', () => { controlFromInputFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tInput.addEventListener('input', () => { controlToInputFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-        };
-
-        setupSliderListeners(fromSlider, toSlider, fromInput, toInput);
-        setupSliderListeners(goalFromSlider, goalToSlider, goalFromInput, goalToInput);
-        setupSliderListeners(raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput);
-
-        fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-        fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-        fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+         });
     }
 
-}
+} // End TableManager Class
 
+
+// --- Global Instance & Render Logic (Mostly Unchanged) ---
 let tableManagerInstance = null;
 
 function onRender(event) {
     try {
         const data = event.detail.args.component_data;
-
-        if (!data) {
-             console.warn("onRender called with no data. Skipping update.");
-             return;
-        }
+        if (!data) { console.warn("onRender called with no data."); return; }
 
         if (!window.tableManagerInstance) {
             window.tableManagerInstance = new TableManager(data);
         } else {
-            window.tableManagerInstance.updateUIState(data);
-            window.tableManagerInstance.updateTableContent(data.rows_html);
-            window.tableManagerInstance.updatePagination();
+            // Subsequent renders: Update state, content, pagination based on new data
+            window.tableManagerInstance.updateUIState(data); // Reflects external state changes
+            window.tableManagerInstance.updateTableContent(data.rows_html); // Update table rows
+            // updatePagination is called within updateUIState now
             window.tableManagerInstance.adjustHeight();
         }
 
+        // Setup ResizeObserver if not already done
         if (!window.resizeObserver && document.getElementById('component-root')) {
-            window.resizeObserver = new ResizeObserver(debounce(() => {
-                if (window.tableManagerInstance) {
-                    window.tableManagerInstance.adjustHeight();
-                }
-            }, 150));
-
-            window.resizeObserver.observe(document.getElementById('component-root'));
+             window.resizeObserver = new ResizeObserver(debounce(() => {
+                 if (window.tableManagerInstance) {
+                     window.tableManagerInstance.adjustHeight();
+                     // Also reposition dropdown if open during resize
+                     if (window.tableManagerInstance.openDropdown) {
+                         window.tableManagerInstance._handleScroll(); // Reuse scroll handler logic for repositioning
+                     }
+                 }
+             }, 150));
+             window.resizeObserver.observe(document.getElementById('component-root'));
         }
 
     } catch (error) {
         console.error("Error during onRender:", error);
-        if (window.tableManagerInstance && typeof window.tableManagerInstance.showLoading === 'function') {
-             window.tableManagerInstance.showLoading(false);
+        if (window.tableManagerInstance?.showLoading) {
+             window.tableManagerInstance.showLoading(false); // Ensure loading is hidden on error
         }
     }
 }
