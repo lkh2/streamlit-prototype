@@ -1537,32 +1537,95 @@ class TableManager {
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-        // Reset internal JS state FIRST
+        // --- Create the state payload FIRST ---
+        // This represents the target state we want Python to use
+         const resetStatePayload = {
+             page: defaultPage,
+             filters: JSON.parse(JSON.stringify(defaultFilters)), // Use deep copy
+             sort_order: defaultSort
+         };
+         console.log("Reset button clicked. Target state:", resetStatePayload);
+
+         // --- Check if already in default state (compare with current internal JS state) ---
+         const currentStatePayload = {
+             page: this.currentPage,
+             filters: this.currentFilters,
+             sort_order: this.currentSort
+         };
+
+         const isAlreadyDefault = JSON.stringify(resetStatePayload, Object.keys(resetStatePayload).sort()) === JSON.stringify(currentStatePayload, Object.keys(currentStatePayload).sort());
+
+         if (isAlreadyDefault) {
+             console.log("Already in default state. No update needed.");
+             // Optional: maybe briefly flash a confirmation? Or just do nothing.
+             return; // Exit the function if already reset
+         }
+
+
+        // --- If not default, proceed with reset ---
+        console.log("Resetting internal JS state and UI elements visually...");
+
+        // Reset internal JS state
         this.currentPage = defaultPage;
         this.currentSort = defaultSort;
-        // Use a deep copy to avoid accidental mutation later
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
+        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); // Deep copy again
         this.selectedCategories = new Set(defaultFilters.categories);
         this.selectedSubcategories = new Set(defaultFilters.subcategories);
         this.selectedCountries = new Set(defaultFilters.countries);
         this.selectedStates = new Set(defaultFilters.states);
 
-        // Show loading indicator immediately
+        // --- Explicit UI Update ---
+        if (this.searchInput) this.searchInput.value = defaultFilters.search;
+        const sortSelect = document.getElementById('sortFilter');
+        if (sortSelect) sortSelect.value = defaultSort;
+        const dateSelect = document.getElementById('dateFilter');
+        if (dateSelect) dateSelect.value = defaultFilters.date;
+
+        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+        this.updateSubcategoryOptions();
+        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
+        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn, true
+        );
+        this.setupMultiSelect(
+            document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn
+        );
+        this.setupMultiSelect(
+             document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn
+         );
+
+        if (defaultFilters.ranges && this.rangeSliderElements) {
+             const { ranges } = defaultFilters;
+             const { fromSlider, toSlider, fromInput, toInput,
+                     goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+                     raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+                     fillSlider } = this.rangeSliderElements;
+             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
+                 fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
+                 fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
+                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             }
+             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
+                 goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
+                 goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
+                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+             }
+             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
+                  raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
+                  raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
+                  fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+             }
+        }
+        console.log("UI elements visually reset.");
+
+        // Show loading indicator
         this.showLoading(true);
 
-        // Construct the state object to send to Python, using the internally reset values
-        const resetStatePayload = {
-            page: this.currentPage,
-            filters: this.currentFilters,
-            sort_order: this.currentSort
-        };
+        // Send the reset state payload to Python
         console.log("Resetting state. Sending payload to Python:", resetStatePayload);
         Streamlit.setComponentValue(resetStatePayload);
-
-        // --- REMOVED --- Explicit UI element updates are removed from here.
-        // The UI will be updated visually when Python sends back the
-        // reset data via the onRender -> updateUIState flow.
-        // --- REMOVED --- this.requestUpdate();
     }
 
 
@@ -1986,6 +2049,21 @@ print(f"Start of Run: Received component value from previous run: {json.dumps(co
 # 2. Update Streamlit session state *if* a valid state was received from the component
 if component_state_from_last_run is not None:
     print("Component sent state. Attempting to update session state.")
+    # --- ADDED: Compare with current state ---
+    try:
+        # Use the state *sent* to the component last time for a more accurate comparison
+        state_sent_last_time = st.session_state.get("state_sent_to_component", DEFAULT_COMPONENT_STATE)
+        print(f"Comparing received state: {json.dumps(component_state_from_last_run, sort_keys=True)}")
+        print(f"With state sent last run: {json.dumps(state_sent_last_time, sort_keys=True)}")
+        # Simple equality check for debugging (might need deep compare later)
+        if json.dumps(component_state_from_last_run, sort_keys=True) == json.dumps(state_sent_last_time, sort_keys=True):
+             print("Received state is identical to the state sent last run.")
+        else:
+             print("Received state differs from state sent last run. Updating session state.")
+    except Exception as e:
+        print(f"Error comparing states: {e}")
+    # --- END ADDED SECTION ---
+
     # Validate the received structure before updating
     if (isinstance(component_state_from_last_run, dict) and
             "page" in component_state_from_last_run and
@@ -1997,24 +2075,27 @@ if component_state_from_last_run is not None:
             isinstance(component_state_from_last_run["filters"].get("ranges"), dict)
         ):
 
-        st.session_state.current_page = component_state_from_last_run["page"]
-        st.session_state.sort_order = component_state_from_last_run["sort_order"]
-        # Perform a safer update for filters, merging if necessary or replacing wholesale
-        # For simplicity, let's replace wholesale but keep existing keys if missing in received
-        # A deep merge might be better, but let's start simple.
-        new_filters = component_state_from_last_run["filters"]
-        # Ensure all default keys exist in the new filter state
-        for key, default_value in DEFAULT_FILTERS.items():
-             if key not in new_filters:
-                 print(f"Warning: Key '{key}' missing in received filters. Using default.")
-                 new_filters[key] = default_value
-             # Optional: Add type checks for nested structures like ranges
-             if key == 'ranges' and not isinstance(new_filters[key], dict):
-                  print(f"Warning: 'ranges' key is not a dict. Resetting.")
-                  new_filters[key] = DEFAULT_FILTERS['ranges']
+        # --- Only update if received state is different from what we last sent ---
+        # This might help prevent unnecessary updates/loops if the component sends back the same state
+        if json.dumps(component_state_from_last_run, sort_keys=True) != json.dumps(st.session_state.get("state_sent_to_component", DEFAULT_COMPONENT_STATE), sort_keys=True):
+            st.session_state.current_page = component_state_from_last_run["page"]
+            st.session_state.sort_order = component_state_from_last_run["sort_order"]
 
-        st.session_state.filters = new_filters
-        print("Session state updated successfully from component state.")
+            new_filters = component_state_from_last_run["filters"]
+            # Ensure all default keys exist in the new filter state
+            for key, default_value in DEFAULT_FILTERS.items():
+                 if key not in new_filters:
+                     print(f"Warning: Key '{key}' missing in received filters. Using default.")
+                     new_filters[key] = default_value
+                 if key == 'ranges' and not isinstance(new_filters[key], dict):
+                      print(f"Warning: 'ranges' key is not a dict. Resetting.")
+                      new_filters[key] = DEFAULT_FILTERS['ranges']
+
+            st.session_state.filters = new_filters
+            print("Session state updated successfully from component state.")
+        else:
+             print("Received state is identical to state sent last time. Skipping session state update.")
+
     else:
         print(f"Warning: Invalid or incomplete structure in received component state: {component_state_from_last_run}. NOT updating session state.")
         # Keep existing session state values if the received state is invalid
@@ -2125,7 +2206,7 @@ elif is_state_filter_active and df_page.is_empty():
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
-    "total_rows": st.session_state.total_rows,
+    "total_rows": st.session_state.total_rows, # Ensure this is correct now
     "filters": st.session_state.filters, # Send the filters used for this render
     "sort_order": st.session_state.sort_order, # Send the sort order used
     "header_html": header_html,
@@ -2136,14 +2217,14 @@ component_data_payload = {
     "min_max_values": min_max_values,
 }
 
-# Store the core state *before* sending it, for comparison on the next run (Can be useful for debugging)
+# Store the core state *before* sending it, for comparison on the next run
 state_being_sent_to_component = {
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order,
 }
-# Use deep copy if filters dict might be mutated elsewhere, though unlikely here
-st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component)) # Use JSON roundtrip for safe deep copy
+# Use deep copy for safety
+st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component))
 print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
 
 
