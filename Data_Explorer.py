@@ -1693,17 +1693,22 @@ class TableManager {
     }
 
     resetFilters() {
-        const defaultFilters = window.tableManagerInstance?.minMaxValues
-            ? { /* ... construct default filters using minMaxValues ... */
-                 search: '', categories: ['All Categories'], subcategories: ['All Subcategories'],
-                 countries: ['All Countries'], states: ['All States'], date: 'All Time',
-                 ranges: {
-                     pledged: { min: this.minMaxValues.pledged.min, max: this.minMaxValues.pledged.max },
-                     goal: { min: this.minMaxValues.goal.min, max: this.minMaxValues.goal.max },
-                     raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
-                 }
+        const defaultMinPledged = this.minMaxValues?.pledged?.min ?? 0;
+        const defaultMaxPledged = this.minMaxValues?.pledged?.max ?? 1000;
+        const defaultMinGoal = this.minMaxValues?.goal?.min ?? 0;
+        const defaultMaxGoal = this.minMaxValues?.goal?.max ?? 10000;
+        const defaultMinRaised = this.minMaxValues?.raised?.min ?? 0;
+        const defaultMaxRaised = this.minMaxValues?.raised?.max ?? 500;
+
+        const defaultFilters = {
+             search: '', categories: ['All Categories'], subcategories: ['All Subcategories'],
+             countries: ['All Countries'], states: ['All States'], date: 'All Time',
+             ranges: {
+                 pledged: { min: defaultMinPledged, max: defaultMaxPledged },
+                 goal: { min: defaultMinGoal, max: defaultMaxGoal },
+                 raised: { min: defaultMinRaised, max: defaultMaxRaised }
              }
-            : JSON.parse(JSON.stringify(DEFAULT_FILTERS)); 
+         };
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
@@ -1712,22 +1717,25 @@ class TableManager {
         const resetStatePayload = {
             page: defaultPage,
             filters: JSON.parse(JSON.stringify(defaultFilters)), 
-            sort_order: defaultSort
+            sort_order: defaultSort,
+            _reset_trigger_timestamp: Date.now()
         };
         Streamlit.setComponentValue(resetStatePayload);
 
         try {
             this.currentPage = defaultPage;
             this.currentSort = defaultSort;
-            this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
+            this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); 
             this.updateUIState({
                 current_page: this.currentPage,
                 total_rows: this.totalRows, 
                 filters: this.currentFilters,
                 sort_order: this.currentSort,
+                filter_options: this.filterOptions,
+                category_subcategory_map: this.categorySubcategoryMap,
+                min_max_values: this.minMaxValues
             });
 
-            this.updatePagination(); 
         } catch (error) {
              console.error("Error during optimistic UI reset in resetFilters:", error);
              this.showLoading(false);
