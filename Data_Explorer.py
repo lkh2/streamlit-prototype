@@ -96,6 +96,7 @@ def generate_component(name, template="", script=""):
 
     _component_func = components.declare_component(name, path=str(dir))
 
+    # Modify wrapper slightly if needed, but primary change is in the main script logic
     def component_wrapper(component_data, key=None, default=None):
         component_value = _component_func(component_data=component_data, key=key, default=default)
         return component_value
@@ -176,27 +177,39 @@ max_goal = min_max_values['goal']['max']
 min_raised = min_max_values['raised']['min']
 max_raised = min_max_values['raised']['max']
 
+# --- Define default state structure ONCE ---
+DEFAULT_FILTERS = {
+    'search': '',
+    'categories': ['All Categories'],
+    'subcategories': ['All Subcategories'],
+    'countries': ['All Countries'],
+    'states': ['All States'],
+    'date': 'All Time',
+    'ranges': {
+        'pledged': {'min': min_pledged, 'max': max_pledged},
+        'goal': {'min': min_goal, 'max': max_goal},
+        'raised': {'min': min_raised, 'max': max_raised}
+    }
+}
+DEFAULT_COMPONENT_STATE = {
+    "page": 1,
+    "filters": DEFAULT_FILTERS,
+    "sort_order": 'popularity'
+}
+
+
 # --- Initialize Session State ---
 if 'filters' not in st.session_state:
-    st.session_state.filters = {
-        'search': '',
-        'categories': ['All Categories'],
-        'subcategories': ['All Subcategories'],
-        'countries': ['All Countries'],
-        'states': ['All States'],
-        'date': 'All Time',
-        'ranges': {
-            'pledged': {'min': min_pledged, 'max': max_pledged},
-            'goal': {'min': min_goal, 'max': max_goal},
-            'raised': {'min': min_raised, 'max': max_raised}
-        }
-    }
+    st.session_state.filters = DEFAULT_FILTERS.copy() # Use copy
 if 'sort_order' not in st.session_state:
-    st.session_state.sort_order = 'popularity' # Default sort
+    st.session_state.sort_order = DEFAULT_COMPONENT_STATE['sort_order']
 if 'current_page' not in st.session_state:
-    st.session_state.current_page = 1
+    st.session_state.current_page = DEFAULT_COMPONENT_STATE['page']
 if 'total_rows' not in st.session_state:
     st.session_state.total_rows = 0 # Will be calculated
+# Initialize the state holder for the component's return value
+if 'kickstarter_state_value' not in st.session_state:
+    st.session_state.kickstarter_state_value = DEFAULT_COMPONENT_STATE.copy()
 
 
 # --- Base LazyFrame ---
@@ -439,78 +452,78 @@ css = """
 <style>
     .title-wrapper {
         width: 100%;
-        text-align: center;    
+        text-align: center;
         margin-bottom: 25px;
     }
-    
+
     .title-wrapper span {
         color: white;
         font-family: 'Playfair Display';
         font-weight: 500;
         font-size: 70px;
     }
-    
-    .table-controls { 
-        position: sticky; 
-        top: 0; 
-        background: #ffffff; 
-        z-index: 2; 
-        padding: 0 20px; 
-        border-bottom: 1px solid #eee; 
-        height: 60px; 
-        display: flex; 
-        align-items: center; 
+
+    .table-controls {
+        position: sticky;
+        top: 0;
+        background: #ffffff;
+        z-index: 2;
+        padding: 0 20px;
+        border-bottom: 1px solid #eee;
+        height: 60px;
+        display: flex;
+        align-items: center;
         justify-content: space-between;
-        margin-bottom: 1rem; 
-        border-radius: 20px; 
+        margin-bottom: 1rem;
+        border-radius: 20px;
     }
-    
-    .table-container { 
+
+    .table-container {
         position: relative;
         flex: 1;
-        padding: 20px; 
-        background: #ffffff; 
+        padding: 20px;
+        background: #ffffff;
         overflow-y: auto;
         transition: height 0.3s ease;
         z-index: 3;
     }
-    
-    table { 
-        border-collapse: collapse; 
-        width: 100%; 
-        background: #ffffff; 
-        table-layout: fixed; 
+
+    table {
+        border-collapse: collapse;
+        width: 100%;
+        background: #ffffff;
+        table-layout: fixed;
     }
 
     /* Column width specifications */
-    th[scope="col"]:nth-child(1) { width: 25%; } 
-    th[scope="col"]:nth-child(2) { width: 12.5%; } 
-    th[scope="col"]:nth-child(3) { width: 120px; } 
-    th[scope="col"]:nth-child(4) { width: 25%; } 
-    th[scope="col"]:nth-child(5) { width: 12.5%; } 
-    th[scope="col"]:nth-child(6) { width: 120px; } 
+    th[scope="col"]:nth-child(1) { width: 25%; }
+    th[scope="col"]:nth-child(2) { width: 12.5%; }
+    th[scope="col"]:nth-child(3) { width: 120px; }
+    th[scope="col"]:nth-child(4) { width: 25%; }
+    th[scope="col"]:nth-child(5) { width: 12.5%; }
+    th[scope="col"]:nth-child(6) { width: 120px; }
 
-    th { 
-        background: #ffffff; 
-        position: sticky; 
-        top: 0; 
-        z-index: 1; 
-        padding: 12px 8px; 
-        font-weight: 500; 
-        font-family: 'Poppins'; 
-        font-size: 14px; 
-        color: #B5B7C0; 
-        text-align: left; 
-    }
-    
-    th:last-child { 
-        text-align: center; 
+    th {
+        background: #ffffff;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        padding: 12px 8px;
+        font-weight: 500;
+        font-family: 'Poppins';
+        font-size: 14px;
+        color: #B5B7C0;
+        text-align: left;
     }
 
-    td { 
-        padding: 8px; 
-        text-align: left; 
-        border-bottom: 1px solid #ddd; 
+    th:last-child {
+        text-align: center;
+    }
+
+    td {
+        padding: 8px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
         white-space: nowrap;
         font-family: 'Poppins';
         font-size: 14px;
@@ -519,70 +532,70 @@ css = """
         overflow: -moz-scrollbars-none;
         scrollbar-width: none;
     }
-    
+
     td::-webkit-scrollbar {
         display: none;
     }
 
-    td:last-child { 
-        width: 120px; 
-        max-width: 120px; 
-        text-align: center; 
+    td:last-child {
+        width: 120px;
+        max-width: 120px;
+        text-align: center;
     }
 
-    .state_cell { 
-        width: 100px; 
-        max-width: 100px; 
-        margin: 0 auto; 
-        padding: 3px 5px; 
-        text-align: center; 
-        border-radius: 4px; 
-        border: solid 1px; 
-        display: inline-block; 
+    .state_cell {
+        width: 100px;
+        max-width: 100px;
+        margin: 0 auto;
+        padding: 3px 5px;
+        text-align: center;
+        border-radius: 4px;
+        border: solid 1px;
+        display: inline-block;
     }
 
-    .state-canceled, .state-failed, .state-suspended { 
-        background: #FFC5C5; 
-        color: #DF0404; 
-        border-color: #DF0404; 
-    }
-    
-    .state-successful { 
-        background: #16C09861; 
-        color: #00B087; 
-        border-color: #00B087; 
-    }
-    
-    .state-live, .state-submitted, .state-started { 
-        background: #E6F3FF; 
-        color: #0066CC; 
-        border-color: #0066CC; 
+    .state-canceled, .state-failed, .state-suspended {
+        background: #FFC5C5;
+        color: #DF0404;
+        border-color: #DF0404;
     }
 
-    .table-wrapper { 
+    .state-successful {
+        background: #16C09861;
+        color: #00B087;
+        border-color: #00B087;
+    }
+
+    .state-live, .state-submitted, .state-started {
+        background: #E6F3FF;
+        color: #0066CC;
+        border-color: #0066CC;
+    }
+
+    .table-wrapper {
         position: relative;
         display: flex;
         flex-direction: column;
-        max-width: 100%; 
-        background: linear-gradient(180deg, #ffffff 15%, transparent 100%); 
-        border-radius: 20px; 
+        max-width: 100%;
+        background: linear-gradient(180deg, #ffffff 15%, transparent 100%);
+        border-radius: 20px;
         overflow: visible;
         transition: height 0.3s ease;
     }
 
-    .search-input { 
-        padding: 8px 12px; 
-        border: 1px solid #ddd; 
-        border-radius: 20px; 
-        width: 200px; 
-        font-size: 10px; 
-        font-family: 'Poppins'; 
+    .search-input {
+        padding: 8px 12px;
+        border: 1px solid #ddd;
+        border-radius: 20px;
+        width: 200px;
+        font-size: 10px;
+        font-family: 'Poppins';
     }
 
-    .search-input:focus { 
-        outline: none; 
-        border-color: #0066CC; 
-        box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1); 
+    .search-input:focus {
+        outline: none;
+        border-color: #0066CC;
+        box-shadow: 0 0 0 2px rgba(0, 102, 204, 0.1);
     }
 
     .pagination-controls {
@@ -658,7 +671,7 @@ css = """
         display: flex;
         flex-direction: row;
     }
-    
+
     .reset-wrapper {
         width: auto;
         height: auto;
@@ -735,14 +748,14 @@ css = """
 
     td a {
         text-decoration: underline;
-        overflow: hidden; 
-        text-overflow: ellipsis; 
-        white-space: nowrap; 
-        font-family: 'Poppins'; 
-        font-size: 14px; 
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-family: 'Poppins';
+        font-size: 14px;
         color: black;
     }
-    
+
     td a:hover {
         color: grey
     }
@@ -1208,7 +1221,7 @@ class TableManager {
             this.currentPage = 1; // Reset to first page on sort change
             this.requestUpdate();
         });
-        
+
         // --- Date Filter ---
         document.getElementById('dateFilter').addEventListener('change', (e) => {
              this.currentFilters.date = e.target.value;
@@ -1271,7 +1284,7 @@ class TableManager {
         // -- Update Sort Dropdown --
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = this.currentSort;
-        
+
          // -- Update Date Dropdown --
          const dateSelect = document.getElementById('dateFilter');
          if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
@@ -1328,9 +1341,8 @@ class TableManager {
     updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
          if (!options || options.length === 0) return; // Handle case where options not rendered yet
          options.forEach(option => {
-            if (selectedSet.has(option.dataset.value)) {
-                 option.classList.add('selected');
-            }
+            const isSelected = selectedSet.has(option.dataset.value);
+            option.classList.toggle('selected', isSelected); // Use toggle for cleaner logic
          });
          this.updateButtonText(selectedSet, buttonElement, allValue);
     }
@@ -1368,8 +1380,10 @@ class TableManager {
              indicator.classList.toggle('hidden', !isLoading);
          }
          // Maybe also disable controls while loading
-         const controls = this.componentRoot.querySelectorAll('button, input, select');
-         controls.forEach(el => el.disabled = isLoading);
+         // Update: Let's NOT disable controls here, as it might interfere if
+         // the loading state gets stuck briefly. The overlay should be enough.
+         // const controls = this.componentRoot.querySelectorAll('button, input, select');
+         // controls.forEach(el => el.disabled = isLoading);
      }
 
 
@@ -1392,11 +1406,24 @@ class TableManager {
             if (page === '...') {
                 return '<span class="page-ellipsis">...</span>';
             }
-            // Note: Direct onclick is simple here, but could use event listeners
-            return `<button class="page-number ${page === this.currentPage ? 'active' : ''}"
-                ${page === this.currentPage ? 'disabled' : ''}
-                onclick="window.tableManagerInstance.goToPage(${page})">${page}</button>`;
+            // Use event listeners instead of inline onclick for better management
+            const button = document.createElement('button');
+            button.className = `page-number ${page === this.currentPage ? 'active' : ''}`;
+            button.textContent = page;
+            button.disabled = page === this.currentPage;
+            button.dataset.page = page; // Store page number in data attribute
+            return button.outerHTML; // Return HTML string
         }).join('');
+
+        // Add event listener to the container for delegation
+        container.removeEventListener('click', this.handlePageClick); // Remove previous listener if any
+        this.handlePageClick = (event) => {
+            if (event.target.classList.contains('page-number') && !event.target.disabled) {
+                this.goToPage(parseInt(event.target.dataset.page));
+            }
+        };
+        container.addEventListener('click', this.handlePageClick);
+
 
         document.getElementById('prev-page').disabled = this.currentPage <= 1;
         document.getElementById('next-page').disabled = this.currentPage >= totalPages;
@@ -1443,41 +1470,55 @@ class TableManager {
     }
 
     resetFilters() {
+        // Get default values directly from the component state defaults
+        const defaultFilters = window.tableManagerInstance?.minMaxValues // Use initial metadata if available
+            ? {
+                search: '',
+                categories: ['All Categories'],
+                subcategories: ['All Subcategories'],
+                countries: ['All Countries'],
+                states: ['All States'],
+                date: 'All Time',
+                ranges: {
+                    pledged: { min: this.minMaxValues.pledged.min, max: this.minMaxValues.pledged.max },
+                    goal: { min: this.minMaxValues.goal.min, max: this.minMaxValues.goal.max },
+                    raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
+                }
+            }
+            : this.currentFilters; // Fallback just in case
+
+        const defaultSort = 'popularity';
+        const defaultPage = 1;
+
         // Reset internal state representation
-        this.selectedCategories = new Set(['All Categories']);
-        this.selectedSubcategories = new Set(['All Subcategories']);
-        this.selectedCountries = new Set(['All Countries']);
-        this.selectedStates = new Set(['All States']);
+        this.selectedCategories = new Set(defaultFilters.categories);
+        this.selectedSubcategories = new Set(defaultFilters.subcategories);
+        this.selectedCountries = new Set(defaultFilters.countries);
+        this.selectedStates = new Set(defaultFilters.states);
 
         // Reset UI elements explicitly
-        this.searchInput.value = '';
-        document.getElementById('sortFilter').value = 'popularity';
-        document.getElementById('dateFilter').value = 'All Time';
+        this.searchInput.value = defaultFilters.search;
+        document.getElementById('sortFilter').value = defaultSort;
+        document.getElementById('dateFilter').value = defaultFilters.date;
 
-        // Reset range sliders (use min/max from metadata)
-        const minPledged = this.minMaxValues?.pledged?.min ?? 0;
-        const maxPledged = this.minMaxValues?.pledged?.max ?? 1000;
-        const minGoal = this.minMaxValues?.goal?.min ?? 0;
-        const maxGoal = this.minMaxValues?.goal?.max ?? 10000;
-        const minRaised = this.minMaxValues?.raised?.min ?? 0;
-        const maxRaised = this.minMaxValues?.raised?.max ?? 500;
-
+        // Reset range sliders using the defaults determined above
         if (this.rangeSliderElements) {
-            const { fromSlider, toSlider, fromInput, toInput, /* ... other sliders/inputs */ fillSlider } = this.rangeSliderElements;
-             // Pledged
-             fromSlider.value = minPledged; toSlider.value = maxPledged;
-             fromInput.value = minPledged; toInput.value = maxPledged;
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-             // Goal
-             const { goalFromSlider, goalToSlider, goalFromInput, goalToInput } = this.rangeSliderElements;
-             goalFromSlider.value = minGoal; goalToSlider.value = maxGoal;
-             goalFromInput.value = minGoal; goalToInput.value = maxGoal;
-             fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-             // Raised
-             const { raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput } = this.rangeSliderElements;
-             raisedFromSlider.value = minRaised; raisedToSlider.value = maxRaised;
-             raisedFromInput.value = minRaised; raisedToInput.value = maxRaised;
-             fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+            const { fromSlider, toSlider, fromInput, toInput, fillSlider,
+                    goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+                    raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput } = this.rangeSliderElements;
+            const ranges = defaultFilters.ranges;
+            // Pledged
+            fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
+            fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
+            fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+            // Goal
+            goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
+            goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
+            fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+            // Raised
+            raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
+            raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
+            fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
         }
 
         // Reset multi-select UI
@@ -1487,11 +1528,9 @@ class TableManager {
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
-
         // Set state and request update
-        this.currentPage = 1;
-        this.currentSort = 'popularity';
-        // No need to construct the full filter object here, just request the update
+        this.currentPage = defaultPage;
+        this.currentSort = defaultSort;
         this.requestUpdate(); // Will gather the reset state from UI
     }
 
@@ -1502,7 +1541,7 @@ class TableManager {
             const root = this.componentRoot;
             if (!root) return;
              // Calculate height based on rendered content
-             const totalHeight = root.offsetHeight + 50; // Add some buffer
+             const totalHeight = root.scrollHeight + 50; // Use scrollHeight, add buffer
 
              // Check if height changed significantly to avoid rapid updates
              if (!this.lastHeight || Math.abs(this.lastHeight - totalHeight) > 10) {
@@ -1517,10 +1556,11 @@ class TableManager {
     updateButtonText(selectedItems, buttonElement, allValueLabel) {
          if (!buttonElement) return;
          const selectedArray = Array.from(selectedItems);
+         // Filter out the 'All' value *before* counting for display logic
          const displayItems = selectedArray.filter(item => item !== allValueLabel);
          displayItems.sort((a, b) => a.localeCompare(b)); // Sort for consistent display
 
-         if (selectedArray.length === 0 || (selectedArray.length === 1 && selectedArray[0] === allValueLabel) || displayItems.length === 0) {
+         if (displayItems.length === 0) { // If only 'All' or nothing selected
              buttonElement.textContent = allValueLabel;
          } else if (displayItems.length > 2) {
              buttonElement.textContent = `${displayItems[0]}, ${displayItems[1]} +${displayItems.length - 2}`;
@@ -1531,10 +1571,20 @@ class TableManager {
 
     setupMultiSelect(options, selectedSet, allValue, buttonElement, triggerSubcategoryUpdate = false) {
         if (!options || options.length === 0) return; // Ensure options exist
-        const allOption = Array.from(options).find(opt => opt.dataset.value === allValue);
+
+        // Use event delegation on the container for efficiency
+        const container = options[0].parentElement; // Assuming all options share the same parent
+        if (!container) return;
+
+        // --- Remove old listener before adding new one ---
+        // Store listener reference if needed, or use anonymous function removal if complex
+        // For simplicity here, we assume we replace the whole container's content often enough
+        // or the listener management needs a more robust approach if container persists.
+        // Let's try rebinding directly to options for now, assuming updateSubcategoryOptions recreates them.
+
 
         options.forEach(option => {
-            // Clone and replace to remove previous listeners cleanly
+            // Clean previous listeners by cloning is a robust way if elements persist
             const newOption = option.cloneNode(true);
             option.parentNode.replaceChild(newOption, option);
 
@@ -1546,20 +1596,25 @@ class TableManager {
              newOption.addEventListener('click', (e) => {
                 const clickedValue = e.target.dataset.value;
                 const isCurrentlySelected = e.target.classList.contains('selected');
-                const currentOptions = e.target.parentElement.querySelectorAll('[data-value]'); // Get current options in scope
+                // Get current options in the *specific dropdown* being clicked
+                const currentOptions = e.target.parentElement.querySelectorAll('[data-value]');
 
                 if (clickedValue === allValue) {
+                    // If 'All' is clicked, clear others, select 'All'
                     selectedSet.clear();
                     selectedSet.add(allValue);
                     currentOptions.forEach(opt => opt.classList.remove('selected'));
-                    e.target.classList.add('selected'); // Select the 'All' option
+                    e.target.classList.add('selected');
                 } else {
+                    // If specific item clicked:
+                    // 1. Deselect 'All' if it was selected
                     const currentAllOption = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
-                    if (currentAllOption) {
+                    if (currentAllOption && currentAllOption.classList.contains('selected')) {
                         selectedSet.delete(allValue);
                         currentAllOption.classList.remove('selected');
                     }
 
+                    // 2. Toggle the clicked item
                     e.target.classList.toggle('selected');
                     if (e.target.classList.contains('selected')) {
                         selectedSet.add(clickedValue);
@@ -1567,8 +1622,10 @@ class TableManager {
                         selectedSet.delete(clickedValue);
                     }
 
-                    // If nothing selected, default back to 'All'
-                    if (selectedSet.size === 0) {
+                    // 3. If *nothing* is selected now, re-select 'All'
+                    const anySelected = Array.from(currentOptions).some(opt => opt.classList.contains('selected') && opt.dataset.value !== allValue);
+                    if (!anySelected) {
+                        selectedSet.clear(); // Clear any remaining (should be none)
                         selectedSet.add(allValue);
                          if (currentAllOption) currentAllOption.classList.add('selected');
                     }
@@ -1577,14 +1634,7 @@ class TableManager {
                 this.updateButtonText(selectedSet, buttonElement, allValue);
 
                 if (triggerSubcategoryUpdate) {
-                    this.updateSubcategoryOptions();
-                     // Important: Need to re-setup the subcategory multi-select listeners after updating options
-                     this.setupMultiSelect(
-                         document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'),
-                         this.selectedSubcategories, // Use the current subcategory set
-                         'All Subcategories',
-                         this.subcategoryBtn // The subcategory button
-                     );
+                    this.updateSubcategoryOptions(); // This will re-render and re-bind subcats
                 }
 
                 this.currentPage = 1; // Reset page on filter change
@@ -1609,13 +1659,14 @@ class TableManager {
         let isAllCategoriesSelected = selectedCategories.has('All Categories');
 
         if (isAllCategoriesSelected || selectedCategories.size === 0) {
-            // Add all known subcategories if 'All Categories' is selected
+            // Use the pre-calculated 'All Categories' list from metadata
              (subcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
         } else {
              availableSubcategories.add('All Subcategories'); // Always include 'All Subcategories'
              selectedCategories.forEach(cat => {
                  (subcategoryMap[cat] || []).forEach(subcat => {
-                      if (subcat !== 'All Subcategories') { // Don't add 'All Sub...' multiple times
+                      // Don't add 'All Subcategories' from individual lists if specific cats selected
+                      if (subcat !== 'All Subcategories') {
                          availableSubcategories.add(subcat);
                       }
                  });
@@ -1623,6 +1674,7 @@ class TableManager {
         }
 
         const sortedSubcategories = Array.from(availableSubcategories);
+        // Ensure 'All Subcategories' is always first
         sortedSubcategories.sort((a, b) => {
             if (a === 'All Subcategories') return -1;
             if (b === 'All Subcategories') return 1;
@@ -1633,42 +1685,57 @@ class TableManager {
             `<div class="subcategory-option" data-value="${opt}">${opt}</div>`
         ).join('');
 
-        // --- Crucial: Reset subcategory selection logic when categories change ---
-        // Determine if the *current* subcategory selection is still valid given the available options
+        // --- Subcategory Selection Reset Logic ---
         const availableSubSet = new Set(sortedSubcategories);
-        let resetSubcategories = false;
-        for (const subcat of this.selectedSubcategories) {
-            if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
-                resetSubcategories = true;
-                break;
+        let resetSelection = false;
+        // If 'All Subcategories' is the only thing selected, keep it.
+        if (!(this.selectedSubcategories.size === 1 && this.selectedSubcategories.has('All Subcategories'))) {
+            for (const subcat of this.selectedSubcategories) {
+                // If a selected subcategory (that isn't 'All Subcategories') is no longer available...
+                if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
+                    resetSelection = true;
+                    break;
+                }
             }
         }
-        // If any selected subcategory (other than 'All') is no longer available, reset to 'All Subcategories'
-        if (resetSubcategories || this.selectedSubcategories.size === 0) {
-            this.selectedSubcategories.clear();
-            this.selectedSubcategories.add('All Subcategories');
+        // Also reset if the set became empty for some reason OR if All Categories was just selected
+        if (resetSelection || this.selectedSubcategories.size === 0 || isAllCategoriesSelected) {
+             // Only reset fully if 'All Categories' is selected OR an invalid subcat was found
+             if (isAllCategoriesSelected || resetSelection || this.selectedSubcategories.size === 0) {
+                console.log("Resetting subcategory selection to 'All Subcategories'");
+                this.selectedSubcategories.clear();
+                this.selectedSubcategories.add('All Subcategories');
+             }
+             // Else (specific categories selected, but current subcats are still valid): keep current selection
+        }
+        // Ensure 'All Subcategories' exists if it's the only one selected after filtering
+        if (this.selectedSubcategories.size === 1 && this.selectedSubcategories.has('All Subcategories') && !availableSubSet.has('All Subcategories')) {
+             // This case should ideally not happen if 'All Subcategories' is always added when specific cats are chosen
+             console.warn("'All Subcategories' was selected but not in available options? Adding it back.");
+             availableSubSet.add('All Subcategories'); // Ensure it exists for selection logic below
         }
 
 
-        // Apply 'selected' class based on the (potentially reset) selectedSubcategories set
+        // --- Re-apply 'selected' class and Re-bind Listeners ---
         const newSubOptions = subcategoryOptionsContainer.querySelectorAll('.subcategory-option');
+        // Update UI based on potentially modified selectedSubcategories
         newSubOptions.forEach(opt => {
             if (this.selectedSubcategories.has(opt.dataset.value)) {
                 opt.classList.add('selected');
+            } else {
+                 opt.classList.remove('selected'); // Ensure others are deselected
             }
         });
 
         this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
 
         // Re-attach listeners for the new subcategory options
-         // Note: We don't request an update here, that happens when a subcategory *itself* is clicked
-         // Or when the category change triggers an update earlier.
-         // We DO need to re-bind the listeners for the *newly created* subcategory options.
-         this.setupMultiSelect(
+        this.setupMultiSelect(
              newSubOptions,
              this.selectedSubcategories,
              'All Subcategories',
              this.subcategoryBtn
+             // No triggerSubcategoryUpdate needed here (false is default)
          );
     }
 
@@ -1691,14 +1758,27 @@ class TableManager {
 
         if (!fromSlider) return; // Exit if elements aren't rendered yet
 
+        this.rangeSliderElements = { // Store references immediately
+            fromSlider, toSlider, fromInput, toInput,
+            goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+            raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+            fillSlider: null // Placeholder for the function
+        };
+
+
         const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => {
+             // Ensure elements exist before proceeding (might be called during initial setup)
+             if (!from || !to || !controlSlider) return;
+
             const rangeDistance = controlSlider.max - controlSlider.min;
             const fromPosition = from.value - controlSlider.min;
             const toPosition = to.value - controlSlider.min;
             // Prevent division by zero or negative range distance
              const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
-            const fromPercent = (fromPosition / safeRangeDistance) * 100;
-            const toPercent = (toPosition / safeRangeDistance) * 100;
+             // Clamp percentages between 0 and 100
+             const fromPercent = Math.min(100, Math.max(0,(fromPosition / safeRangeDistance) * 100));
+             const toPercent = Math.min(100, Math.max(0,(toPosition / safeRangeDistance) * 100));
+
 
             controlSlider.style.background = `linear-gradient(
                 to right,
@@ -1710,78 +1790,92 @@ class TableManager {
                 ${sliderColor} 100%)`;
         };
 
+        // Store the fillSlider function in the shared object
+        this.rangeSliderElements.fillSlider = fillSlider;
+
         const debouncedRequestUpdate = debounce(() => {
             this.currentPage = 1; // Reset page on range change
             this.requestUpdate();
         }, 500); // Debounce slider/input changes
 
+        const controlFromInput = (fromSlider, toSlider, fromInput) => {
+             const minVal = parseInt(fromSlider.min);
+             const maxVal = parseInt(toSlider.value); // Use other slider's current value as max
+             let fromVal = parseInt(fromInput.value);
+
+             if (isNaN(fromVal) || fromVal < minVal) {
+                 fromVal = minVal;
+             }
+             if (fromVal > maxVal) {
+                 fromVal = maxVal;
+             }
+             fromInput.value = fromVal; // Correct input field first
+             fromSlider.value = fromVal; // Sync slider
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+        };
+
+        const controlToInput = (fromSlider, toSlider, toInput) => {
+             const minVal = parseInt(fromSlider.value); // Use other slider's current value as min
+             const maxVal = parseInt(toSlider.max);
+             let toVal = parseInt(toInput.value);
+
+             if (isNaN(toVal) || toVal > maxVal) {
+                 toVal = maxVal;
+             }
+             if (toVal < minVal) {
+                 toVal = minVal;
+             }
+             toInput.value = toVal; // Correct input field first
+             toSlider.value = toVal; // Sync slider
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+        };
+
+
         const controlFromSlider = (fromSlider, toSlider, fromInput) => {
              const [from, to] = [parseInt(fromSlider.value), parseInt(toSlider.value)];
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
              if (from > to) {
+                 // If lower thumb tries to cross upper thumb, set lower thumb value to upper thumb value
                  fromSlider.value = to;
                  fromInput.value = to;
              } else {
-                  fromInput.value = from;
+                 fromInput.value = from; // Sync input if valid
              }
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         };
 
         const controlToSlider = (fromSlider, toSlider, toInput) => {
              const [from, to] = [parseInt(fromSlider.value), parseInt(toSlider.value)];
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-             if (from <= to) {
-                 toInput.value = to;
-             } else {
-                 toInput.value = from;
+             if (from > to) {
+                 // If upper thumb tries to cross lower thumb, set upper thumb value to lower thumb value
                  toSlider.value = from;
+                 toInput.value = from;
+             } else {
+                 toInput.value = to; // Sync input if valid
              }
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         };
-        
+
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
+            // Slider listeners trigger slider control logic + debounced update
             fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRequestUpdate(); });
             tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRequestUpdate(); });
-            fInput.addEventListener('input', () => { /* Basic sync, validation on blur/enter */ if (parseInt(fInput.value) >= parseInt(fInput.min) && parseInt(fInput.value) <= parseInt(tSlider.value)) fSlider.value = fInput.value; fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); debouncedRequestUpdate(); });
-            tInput.addEventListener('input', () => { /* Basic sync, validation on blur/enter */ if (parseInt(tInput.value) <= parseInt(tInput.max) && parseInt(tInput.value) >= parseInt(fSlider.value)) tSlider.value = tInput.value; fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); debouncedRequestUpdate(); });
-            
-             // Add blur/enter listeners for final validation and update request
-             const validateAndUpdate = (input, isMin) => {
-                 let value = parseInt(input.value);
-                 const minAllowed = parseInt(input.min);
-                 const maxAllowed = parseInt(input.max);
-                 const otherSlider = isMin ? tSlider : fSlider;
-                 const otherValue = parseInt(otherSlider.value);
 
-                 if (isNaN(value)) value = isMin ? minAllowed : maxAllowed; // Default if invalid input
+            // Input listeners trigger input control logic (which syncs sliders) + debounced update
+            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRequestUpdate(); });
+            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); debouncedRequestUpdate(); });
 
-                 if (isMin) {
-                     value = Math.max(minAllowed, Math.min(otherValue, value)); // Clamp between min and other slider's value
-                 } else {
-                     value = Math.min(maxAllowed, Math.max(otherValue, value)); // Clamp between other slider's value and max
-                 }
-                 input.value = value; // Update input field
-                 (isMin ? fSlider : tSlider).value = value; // Update corresponding slider
-                 fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); // Update visual fill
-                 debouncedRequestUpdate(); // Trigger update after validation
-             };
-
-             fInput.addEventListener('blur', () => validateAndUpdate(fInput, true));
-             tInput.addEventListener('blur', () => validateAndUpdate(tInput, false));
-             fInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); validateAndUpdate(fInput, true); } });
-             tInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); validateAndUpdate(tInput, false); } });
+            // Use 'change' event for final validation after direct input or blur
+            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); /* Update already requested by input */ });
+            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); /* Update already requested by input */ });
         };
+
 
         setupSliderListeners(fromSlider, toSlider, fromInput, toInput);
         setupSliderListeners(goalFromSlider, goalToSlider, goalFromInput, goalToInput);
         setupSliderListeners(raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput);
 
-        this.rangeSliderElements = {
-            fromSlider, toSlider, fromInput, toInput,
-            goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-            raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-            fillSlider // Store the function for reset/update
-        };
 
-        // Initial fill
+        // Initial fill based on current values (should be defaults)
         fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
         fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
@@ -1795,16 +1889,13 @@ let tableManagerInstance = null;
 function onRender(event) {
     try { // Add try block
         const data = event.detail.args.component_data;
-        console.log("Streamlit RENDER event received:", data);
- 
-        if (!window.tableManagerInstance) {
-            // First render: Create the manager instance
+        // Use a flag to prevent re-initialization if onRender is called multiple times rapidly
+        if (data && !window.tableManagerInstance) {
+            // First render or re-render after instance was lost: Create the manager instance
             console.log("Initializing TableManager instance...");
             window.tableManagerInstance = new TableManager(data);
-            // Expose goToPage globally for pagination buttons
-            window.goToPage = window.tableManagerInstance.goToPage.bind(window.tableManagerInstance);
-             console.log("TableManager initialized.");
-        } else {
+            console.log("TableManager initialized.");
+        } else if (data && window.tableManagerInstance) {
             // Subsequent renders: Update the existing manager instance
             console.log("Updating existing TableManager instance...");
             window.tableManagerInstance.updateUIState(data); // Update filter controls, ranges, etc.
@@ -1815,20 +1906,20 @@ function onRender(event) {
             console.log("Pagination updated.");
             window.tableManagerInstance.adjustHeight(); // Adjust height after content update
             console.log("Height adjusted.");
+        } else {
+             console.warn("onRender called with no data or instance already exists inappropriately?");
         }
- 
-        // Add ResizeObserver after the first render
-        if (!window.resizeObserver) {
+
+        // Add ResizeObserver only once
+        if (!window.resizeObserver && document.getElementById('component-root')) {
             window.resizeObserver = new ResizeObserver(debounce(() => {
                 if (window.tableManagerInstance) {
                     window.tableManagerInstance.adjustHeight();
                 }
-            }, 100)); // Debounce resize events
- 
-            const rootElement = document.getElementById('component-root');
-            if (rootElement) {
-                window.resizeObserver.observe(rootElement);
-            }
+            }, 150)); // Slightly increased debounce for resize
+
+            window.resizeObserver.observe(document.getElementById('component-root'));
+            console.log("ResizeObserver attached.");
         }
         console.log("onRender finished successfully.");
     } catch (error) { // Add catch block
@@ -1840,7 +1931,7 @@ function onRender(event) {
         }
     }
 }
- 
+
 Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
 Streamlit.setComponentReady();
 """
@@ -1851,92 +1942,35 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 
 # --- Main App Logic ---
 
-# 1. Prepare default state dictionary (used for initial state and component default)
-default_state = {
-    "page": 1, # Sensible default page
-    "filters": { # Default filters matching session state init
-        'search': '',
-        'categories': ['All Categories'],
-        'subcategories': ['All Subcategories'],
-        'countries': ['All Countries'],
-        'states': ['All States'],
-        'date': 'All Time',
-        'ranges': {
-            'pledged': {'min': min_pledged, 'max': max_pledged},
-            'goal': {'min': min_goal, 'max': max_goal},
-            'raised': {'min': min_raised, 'max': max_raised}
-        }
-    },
-    "sort_order": 'popularity' # Default sort matching session state init
-}
+# 1. Get the state dictionary sent by the component on the *previous* run.
+#    Fall back to the defined default state ONLY if nothing exists in session state yet.
+component_value = st.session_state.get("kickstarter_state_value", DEFAULT_COMPONENT_STATE)
+print(f"Start of Run: Received component value from previous run: {json.dumps(component_value)}")
 
-# Initialize session state keys if they don't exist, using defaults
-st.session_state.setdefault('current_page', default_state['page'])
-st.session_state.setdefault('filters', default_state['filters'])
-st.session_state.setdefault('sort_order', default_state['sort_order'])
-st.session_state.setdefault('total_rows', 0)
-# kickstarter_state_value will be set by the component call later or default
-
-# Get the value sent by the component *last time*
-# Use default_state as fallback ONLY if kickstarter_state_value hasn't been set at all
-component_value = st.session_state.get("kickstarter_state_value", default_state)
-print(f"Received component value from previous run: {json.dumps(component_value)}")
-
-# 2. Update Streamlit session state based on the value received *from the component*
-# Store the state *before* potential updates for comparison/logging if needed
-prev_page = st.session_state.current_page
-prev_filters = st.session_state.filters
-prev_sort = st.session_state.sort_order
-
-if isinstance(component_value, dict): # Ensure we got a dictionary
-    # Update page, falling back to current state if key missing in component_value
+# 2. Update Streamlit's internal session state based on the received component value.
+#    This ensures Python calculations use the state triggered by the user in the browser.
+if isinstance(component_value, dict):
     st.session_state.current_page = component_value.get("page", st.session_state.current_page)
-
-    # Update filters: Replace entirely if component sent a valid dict, else keep current
-    new_filters = component_value.get("filters")
-    if isinstance(new_filters, dict):
-         # Basic validation: check if essential keys exist before assigning
-         if all(k in new_filters for k in ['search', 'categories', 'subcategories', 'countries', 'states', 'date', 'ranges']):
-             st.session_state.filters = new_filters
-         else:
-             print("Warning: 'filters' dict from component_value missing keys, keeping existing session state filters.")
-    else:
-         # If component didn't send filters or sent wrong type, keep existing
-         print("Warning: 'filters' key missing or not a dict in component_value, keeping existing session state filters.")
-         pass # Keep st.session_state.filters as is
-
-    # Update sort order, falling back to current state if key missing
     st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
 
-    # Log if state changed
-    state_changed_log = (
-        st.session_state.current_page != prev_page or
-        json.dumps(st.session_state.filters, sort_keys=True) != json.dumps(prev_filters, sort_keys=True) or
-        st.session_state.sort_order != prev_sort
-    )
-    if state_changed_log:
-        print("Session state updated based on component value.")
+    # Safely update filters: Use the received filters if valid, otherwise keep existing.
+    new_filters = component_value.get("filters")
+    if isinstance(new_filters, dict) and all(k in new_filters for k in DEFAULT_FILTERS.keys()):
+        st.session_state.filters = new_filters
     else:
-        print("Session state remains unchanged after processing component value.")
-
+        print(f"Warning: Invalid or missing 'filters' in component value. Using existing session state filters: {st.session_state.filters}")
+        # Keep existing st.session_state.filters
 else:
-    # This might happen on the very first run if default isn't passed correctly,
-    # or if component sends non-dict value. Rely on initialized session state.
-    print("Warning: component_value was not a dictionary, relying on existing session state.")
-    pass
+    print(f"Warning: Component value was not a dictionary ({type(component_value)}). Using existing session state.")
+    # Keep existing session state values
 
 
-# --- REMOVED RERUN LOGIC ---
-print("Proceeding with script execution using current state")
-print(f"Current Page: {st.session_state.current_page}, Filters: {json.dumps(st.session_state.filters)}, Sort: {st.session_state.sort_order}")
+print(f"State for Calculations: Page={st.session_state.current_page}, Sort={st.session_state.sort_order}, Filters={json.dumps(st.session_state.filters)}")
 
 
-# 4. Apply filters and sorting to the base LazyFrame (using updated session state)
-print(f"Applying filters: {st.session_state.filters}")
-print(f"Applying sort: {st.session_state.sort_order}")
-# Ensure base_lf exists
+# 3. Apply filters and sorting using the *updated* session state.
 if 'base_lf' not in st.session_state:
-     st.error("Base LazyFrame not found in session state. Please reload the application or check data source.")
+     st.error("Base LazyFrame not found. Please reload.")
      st.stop()
 
 filtered_lf = apply_filters_and_sort(
@@ -1945,82 +1979,78 @@ filtered_lf = apply_filters_and_sort(
     st.session_state.sort_order
 )
 
-# 5. Calculate total rows for pagination *after* filtering
+# 4. Calculate total rows for pagination.
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    # Use pl.len() instead of pl.count() and stream collection
     total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
 except Exception as e:
     st.error(f"Error calculating total rows: {e}")
-    st.session_state.total_rows = 0 # Set to 0 on error
+    st.session_state.total_rows = 0
 
-# 6. Calculate pagination details
+# 5. Calculate pagination details and fetch the current page data.
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
-# Clamp page number *after* potential update and *before* fetching data
-# Ensure page is valid even if total_rows is 0 or total_pages is 0
+# Clamp current page *after* total rows calculation
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
-# 7. Fetch *only* the data for the current page
-df_page = pl.DataFrame() # Default to empty DF
-# Check if fetching is needed and possible
+df_page = pl.DataFrame()
 if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True) # Use streaming collect
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True)
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
-        # Keep df_page empty
 else:
-    if st.session_state.total_rows == 0:
-         print("No rows match filters, skipping page fetch.")
-    elif PAGE_SIZE <= 0:
-         print("PAGE_SIZE is zero or negative, skipping page fetch.")
-    else: # Offset out of bounds
-         print(f"Calculated offset {offset} is out of bounds for total rows {st.session_state.total_rows}. Displaying empty page.")
-         # Fetching nothing by keeping df_page empty is correct here.
+     print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}")
 
 
-# 8. Generate HTML for the fetched page
+# 6. Generate HTML for the fetched page.
 header_html, rows_html = generate_table_html_for_page(df_page)
 
-# 9. Prepare data payload for the component *for this run*
-#    This payload reflects the state processed in *this* run.
+# 7. Prepare the data payload to send *to* the component for this render.
+#    This payload contains the results of the calculations based on the state
+#    received at the beginning of this run.
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
     "total_rows": st.session_state.total_rows,
-    "filters": st.session_state.filters, # Send the *current* filters used for this render
-    "sort_order": st.session_state.sort_order, # Send the *current* sort order
+    "filters": st.session_state.filters, # Send the filters used for this render
+    "sort_order": st.session_state.sort_order, # Send the sort order used
     "header_html": header_html,
     "rows_html": rows_html,
-    # Pass necessary options/metadata for UI rendering
+    # Pass metadata needed for UI rendering
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
 }
 
-# 10. Render the component ONCE, sending the payload and potentially getting the next state request
-print("Rendering component...")
+# 8. Render the component.
+#    - Send the calculated payload.
+#    - Use a consistent key.
+#    - **Set default=None** to avoid feeding the previous run's state back directly
+#      within the same component call, which might be causing the loop.
+print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
-    key="kickstarter_state", # The single key for this component instance
-    default=component_value # Pass the state received at the START of this run as the default
+    key="kickstarter_state", # Stable key
+    default=None # Explicitly set to None
 )
 
-# Store the *raw* value received from the component for the next run's Step 1
-# If the component didn't send anything back (returned None), component_return_value will be
-# the default we passed in (component_value), maintaining state consistency.
+# 9. Store the raw value returned by the component *now* into session state
+#    so it can be read at the START of the *next* script run.
+#    If the component didn't return anything (e.g., no user interaction),
+#    component_return_value will be None. We store it as is.
 st.session_state.kickstarter_state_value = component_return_value
-print(f"Stored component value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
+print(f"End of Run: Stored component value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
 
-# Optional: Add a small footer to show the current state for debugging
+
+# Optional: Debug footer
 # st.markdown("---")
 # st.caption(f"Debug Info: Page {st.session_state.current_page}, Date Filter: {st.session_state.filters.get('date', 'N/A')}, Sort: {st.session_state.sort_order}, Total Rows: {st.session_state.total_rows}")
