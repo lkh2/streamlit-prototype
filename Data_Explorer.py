@@ -2063,32 +2063,36 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 # --- Main App Logic ---
 
 # 1. Get the state dictionary sent by the component on the *previous* run.
-component_state_from_last_run = st.session_state.get("kickstarter_state_value", None) # Default to None
+component_state_from_last_run = st.session_state.get("kickstarter_state_value", None)
 print(f"Start of Run: Received component value from previous run: {json.dumps(component_state_from_last_run)}")
 
-# Get the state that was SENT to the component in the *previous* run
+# Get the state that was SENT to the component in the previous run for comparison
 state_sent_last_run = st.session_state.get('state_sent_to_component', DEFAULT_COMPONENT_STATE)
 
-
-# 2. Determine if session state needs updating based on component's last message
+# 2. Check if the component actually sent back a *new* state.
+#    Compare the received state with the state we last sent TO the component.
 component_sent_new_state = False
 if component_state_from_last_run is not None:
     try:
+        # Use JSON dumps for reliable comparison of nested dicts/lists.
         last_run_str = json.dumps(component_state_from_last_run, sort_keys=True)
         sent_last_run_str = json.dumps(state_sent_last_run, sort_keys=True)
+
         if last_run_str != sent_last_run_str:
             component_sent_new_state = True
-            print(f"State received is DIFFERENT from state sent last run.")
+            print(f"State change detected: Received state differs from state sent last run.")
         else:
-            print(f"State received is THE SAME as state sent last run.")
+             print(f"No state change: Received state matches state sent last run.")
+
     except TypeError as e:
-         print(f"Error comparing states using JSON: {e}. Assuming state is new.")
-         component_sent_new_state = True # Fallback
+         print(f"Error comparing states using JSON: {e}. Assuming state is new for safety.")
+         # Fallback: Treat as new state if comparison fails
+         component_sent_new_state = True
 else:
      print("No state received from component in the last run (value is None).")
 
 
-# 3. Update session state *only if* the component sent a genuinely new state
+# 3. Update Streamlit session state *only if* a new, valid state was received.
 if component_sent_new_state:
     print("Component sent NEW state. Attempting to update session state.")
     # Validate the received structure before updating
@@ -2098,49 +2102,52 @@ if component_sent_new_state:
             "filters" in component_state_from_last_run and
             isinstance(component_state_from_last_run.get("filters"), dict)):
 
-        # Safely update, ensuring all filter keys/structure persist
+        # --- Safely update session state ---
         st.session_state.current_page = component_state_from_last_run["page"]
         st.session_state.sort_order = component_state_from_last_run["sort_order"]
 
+        # Validate and update filters carefully
         new_filters = component_state_from_last_run["filters"]
         validated_filters = DEFAULT_FILTERS.copy() # Start with defaults
         for key, default_value in DEFAULT_FILTERS.items():
             if key in new_filters:
-                # Basic type/structure validation before assigning
-                if key == 'ranges':
-                     if isinstance(new_filters[key], dict):
-                         validated_range = default_value.copy()
-                         for r_key, r_default in default_value.items():
-                             if r_key in new_filters[key] and isinstance(new_filters[key].get(r_key), dict) and all(k in new_filters[key][r_key] for k in ['min', 'max']):
-                                 # Add type check/conversion for min/max
-                                 try:
-                                     min_val = float(new_filters[key][r_key]['min'])
-                                     max_val = float(new_filters[key][r_key]['max'])
-                                     validated_range[r_key] = {'min': min_val, 'max': max_val}
-                                 except (ValueError, TypeError):
-                                      print(f"Warning: Invalid min/max value type for range '{r_key}'. Using default.")
-                             else:
-                                  print(f"Warning: Invalid structure/keys for range '{r_key}'. Using default.")
-                         validated_filters[key] = validated_range
-                     else:
-                         print(f"Warning: Invalid type for 'ranges'. Using default.")
-                elif isinstance(new_filters.get(key), type(default_value)): # Use get for safety
-                     validated_filters[key] = new_filters[key]
-                else:
-                     print(f"Warning: Type mismatch for filter '{key}'. Using default.")
-            else:
-                 print(f"Warning: Key '{key}' missing in received filters. Using default.")
+                 # Basic type/structure validation before assigning
+                 if key == 'ranges':
+                      if isinstance(new_filters[key], dict):
+                          validated_range = default_value.copy()
+                          for r_key, r_default in default_value.items():
+                              if r_key in new_filters[key] and isinstance(new_filters[key].get(r_key), dict) and all(k in new_filters[key][r_key] for k in ['min', 'max']):
+                                  # Add type check for min/max
+                                  try:
+                                      min_val = float(new_filters[key][r_key]['min'])
+                                      max_val = float(new_filters[key][r_key]['max'])
+                                      validated_range[r_key] = {'min': min_val, 'max': max_val}
+                                  except (ValueError, TypeError):
+                                      print(f"Warning: Invalid min/max type for range '{r_key}'. Using default.")
+                              else:
+                                   print(f"Warning: Invalid/missing structure for range '{r_key}'. Using default.")
+                          validated_filters[key] = validated_range
+                      else:
+                          print(f"Warning: Invalid type for 'ranges'. Using default.")
+                 elif isinstance(new_filters.get(key), type(default_value)): # Use .get for safety
+                      validated_filters[key] = new_filters[key]
+                 else:
+                      print(f"Warning: Type mismatch for filter '{key}'. Using default.")
+            # else: # Keep the default if key is missing
+            #     print(f"Warning: Key '{key}' missing in received filters. Using default.") # Optional warning
 
         st.session_state.filters = validated_filters
         print("Session state updated successfully from component state.")
+        # --- End safe update ---
     else:
         print(f"Warning: Invalid structure in new component state: {component_state_from_last_run}. NOT updating session state.")
+        # Keep existing session state values
 else:
     # If component didn't send a new value (value is None or same as last sent),
     # we continue using the existing session state values.
-    print("Component did not send a new state OR received state was invalid. Using existing session state.")
+    print("Component did not send a new state OR received state was invalid/same. Using existing session state.")
 
-# --- Now proceed with calculations using the finalized session state ---
+
 print(f"State for Calculations: Page={st.session_state.current_page}, Sort={st.session_state.sort_order}, Filters={json.dumps(st.session_state.filters)}")
 
 # 4. Apply filters and sorting using the *current* session state.
@@ -2154,77 +2161,97 @@ filtered_lf = apply_filters_and_sort(
     st.session_state.sort_order
 )
 
-# 5. Calculate total rows for pagination.
+# 5. Calculate total rows for pagination *after* filtering.
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    # Use pl.len() for potentially faster count on LazyFrames
-    total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
-    st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
-    # --- Fallback if pl.len() causes issues ---
-    # total_rows_result = filtered_lf.select(pl.lit(1).alias("count")).collect()
-    # st.session_state.total_rows = total_rows_result.height
+    # Use pl.len() and standard collect() for count
+    total_rows_result_df = filtered_lf.select(pl.len()).collect() # Removed streaming=True
+    # Extract the count using item()
+    st.session_state.total_rows = total_rows_result_df.item() if total_rows_result_df is not None and not total_rows_result_df.is_empty() else 0
     count_duration = time.time() - start_count_time
-    print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
+    # More prominent logging for the calculated total_rows
+    print(f"*** Python: Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s) ***")
 except Exception as e:
     st.error(f"Error calculating total rows: {e}")
     st.session_state.total_rows = 0 # Set to 0 on error
 
 
 # 6. Calculate pagination details and fetch the current page data.
-total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
+total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 and st.session_state.total_rows > 0 else 1
+print(f"*** Python: Calculated total_pages = {total_pages} based on total_rows={st.session_state.total_rows} ***") # Log calculated total_pages
 # Clamp current page *after* total rows calculation
-st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
+current_page_before_clamp = st.session_state.current_page
+st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages))
+if current_page_before_clamp != st.session_state.current_page:
+    # Log if clamping occurred
+    print(f"*** Python: Clamped current_page from {current_page_before_clamp} to {st.session_state.current_page} (total_pages={total_pages}) ***")
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
 df_page = pl.DataFrame() # Initialize as empty DataFrame
 
-# Fetch data using slice().collect() - generally recommended for pagination
-if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
+# Fetch the specific page slice using slice().collect()
+if st.session_state.total_rows > 0 and offset < st.session_state.total_rows:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True)
+        # Fetch only the slice needed for the current page using standard collect()
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect() # Removed streaming=True
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
 
+        # Debugging for specific filters if needed
+        is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States']
+        if is_state_filter_active and not df_page.is_empty():
+             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}")
+
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
-        df_page = pl.DataFrame() # Ensure empty on error
+        df_page = pl.DataFrame() # Ensure df_page is empty on error
 else:
-     print(f"Skipping page fetch. Conditions not met: Total Rows={st.session_state.total_rows}, Offset={offset}, Page Size={PAGE_SIZE}")
+     # Log why fetch is skipped
+     print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}, Total Pages: {total_pages}")
 
 
 # 7. Generate HTML for the fetched page.
 print("Generating HTML for table...")
-header_html, rows_html = generate_table_html_for_page(df_page) # Handles empty df_page
+header_html, rows_html = generate_table_html_for_page(df_page) # df_page can be empty here
+
+# Debugging HTML generation if needed
+is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States'] # Re-check for logging consistency
+if is_state_filter_active and not df_page.is_empty():
+    print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
 
 
 # 8. Prepare the data payload to send *to* the component for this render.
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
-    "total_rows": st.session_state.total_rows, # Send the calculated total_rows
-    "filters": st.session_state.filters,
-    "sort_order": st.session_state.sort_order,
+    "total_rows": st.session_state.total_rows, # Crucial for pagination UI
+    "filters": st.session_state.filters, # Send the filters used for this render
+    "sort_order": st.session_state.sort_order, # Send the sort order used
     "header_html": header_html,
     "rows_html": rows_html,
+    # Pass metadata needed for UI rendering
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
-    "rerender_trigger": time.time() # Keep for reset button fix
+    # "rerender_trigger": time.time() # Generally not needed with proper state handling
 }
+# Log the specific total_rows value being sent
+print(f"*** Python: Payload PREPARED. Sending total_rows: {component_data_payload['total_rows']} to component. ***")
 
-# 9. Store the core state *being sent* this run, for comparison later and in the next run
-state_being_sent_to_component = {
+# 9. Store the core state *being sent* this run, for comparison on the next run.
+state_being_sent_this_run = {
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order,
 }
-# Use JSON roundtrip for safe deep copy
-st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component))
+# Use JSON roundtrip for a safe deep copy
+st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_this_run))
 print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
-print(f"DEBUG: Sending total_rows={st.session_state.total_rows} to component payload.")
+# Redundant log removed, covered by the payload log above
+# print(f"DEBUG: Sending total_rows={st.session_state.total_rows} to component payload.")
 
 
 # 10. Render the component.
@@ -2232,66 +2259,22 @@ print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # Stable key
-    default=None
+    default=None # Explicitly set to None
 )
 
-# 11. Compare received state with state just sent, and trigger immediate rerun if necessary
-print(f"End of Run: Received value from component: {json.dumps(component_return_value)}")
-# state_sent_this_run = st.session_state.get("state_sent_to_component") # Already have it in state_being_sent_to_component
-
-needs_rerun = False
-if component_return_value is not None:
-    # Basic validation of the received structure
-    if (isinstance(component_return_value, dict) and
-            "page" in component_return_value and
-            "sort_order" in component_return_value and
-            "filters" in component_return_value and
-            isinstance(component_return_value.get("filters"), dict)):
-
-        try:
-            received_state_str = json.dumps(component_return_value, sort_keys=True)
-            # Compare with the state Python just constructed and sent
-            sent_state_str = json.dumps(state_being_sent_to_component, sort_keys=True)
-
-            if received_state_str != sent_state_str:
-                print("Change detected: Component state differs from state JUST sent this run.")
-
-                # --- Update Session State Directly ---
-                # This ensures the *next* run (triggered by rerun) starts with the correct state
-                st.session_state.current_page = component_return_value["page"]
-                st.session_state.sort_order = component_return_value["sort_order"]
-
-                # Safely update filters (redundant validation logic removed for brevity, same as step 3)
-                # (Assuming validation in step 3 is sufficient for the rerun case)
-                # Re-add validation if strictness is needed here too
-                st.session_state.filters = component_return_value["filters"] # Trusting the structure based on initial check
-
-                print("Session state updated based on component return value FOR RERUN.")
-                # --- END Session State Update ---
-
-                needs_rerun = True
-            else:
-                print("No change detected: Component state matches state JUST sent this run.")
-        except Exception as e:
-            print(f"Error during state comparison or update for rerun: {e}")
-    else:
-        print("Warning: Invalid structure received from component at end of run. Skipping comparison/update.")
-else:
-    print("Component returned None at end of run. Skipping comparison.")
-
-
-# 12. Store the raw component value for the *next* script run's step 1
+# 11. Store the raw component value for potential use at the *start* of the next run.
 st.session_state.kickstarter_state_value = component_return_value # Store it regardless
+print(f"End of Run: Stored component return value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
 
 
-# 13. Trigger rerun if needed
-if needs_rerun:
-    print(">>> Triggering st.rerun() <<<")
-    st.rerun()
-else:
-     print("Script run finished normally.")
+# --- REMOVED Immediate Rerun Logic ---
+# The script will naturally rerun if the component sends back a *different* state
+# than what was sent, because that difference will be detected at step #2/#3
+# in the *next* run, leading to updated calculations and a new render.
+
+print("Script run finished.")
 
 
-# Optional: Debug footer (might not display if rerun happens)
+# Optional: Debug footer
 # st.markdown("---")
-# st.caption(f"Debug Info: Page {st.session_state.current_page}, Date Filter: {st.session_state.filters.get('date', 'N/A')}, Sort: {st.session_state.sort_order}, Total Rows: {st.session_state.total_rows}")
+# st.caption(f"Debug Info: Page {st.session_state.current_page} of {total_pages}, Total Rows: {st.session_state.total_rows}, Date: {st.session_state.filters.get('date')}, Sort: {st.session_state.sort_order}")
