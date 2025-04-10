@@ -1873,7 +1873,7 @@ try:
     print("Calculating total rows...")
     start_count_time = time.time()
     # Use fetch instead of collect for potentially faster count on some backends
-    total_rows_result = filtered_lf.select(pl.count()).collect()
+    total_rows_result = filtered_lf.select(pl.len()).collect()
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
@@ -1892,7 +1892,7 @@ if st.session_state.total_rows > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True) # Use streaming engine if beneficial
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming") # Use streaming engine if beneficial
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
     except Exception as e:
