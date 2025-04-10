@@ -1785,15 +1785,15 @@ class TableManager {
         // Store the fillSlider function in the shared object
         this.rangeSliderElements.fillSlider = fillSlider;
 
-        // --- Debounced Update Request ---
-        // Use a single debounced function for all slider/input changes
-        const debouncedRangeUpdate = debounce(() => {
-            this.currentPage = 1; // Reset page on range change
-            this.requestUpdate();
-        }, 600); // Slightly longer debounce for sliders
+        // --- REMOVED Debounced Update Request ---
+        // const debouncedRangeUpdate = debounce(() => {
+        //     this.currentPage = 1; // Reset page on range change
+        //     this.requestUpdate();
+        // }, 600);
 
 
         // --- Control Logic (Handles Slider/Input Interactions) ---
+        // (Control functions remain the same)
         const controlFromInput = (fromSlider, toSlider, fromInput) => {
              const minVal = parseFloat(fromSlider.min);
              const maxVal = parseFloat(toSlider.value); // Use other slider's current value as max constraint
@@ -1847,19 +1847,17 @@ class TableManager {
         // --- Event Listener Setup ---
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
             // 'input' event for immediate visual feedback during sliding/typing
-            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); });
-            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); });
-            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); });
-            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); });
+            // AND request update immediately (no debounce)
+            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); this.requestUpdate(); });
+            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); this.requestUpdate(); });
+            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); this.requestUpdate(); });
+            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); this.requestUpdate(); });
 
-            // Use 'change' event on sliders to trigger the debounced update (fires when user releases thumb)
-            fSlider.addEventListener('change', debouncedRangeUpdate);
-            tSlider.addEventListener('change', debouncedRangeUpdate);
-
-            // Use 'change' event on inputs to trigger update (fires on blur or Enter)
-            // This also helps validate final typed values.
-            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+            // Use 'change' event on sliders/inputs to ensure final value is sent (no debounce needed here either)
+            fSlider.addEventListener('change', () => { this.requestUpdate(); });
+            tSlider.addEventListener('change', () => { this.requestUpdate(); });
+            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); this.requestUpdate(); });
+            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); this.requestUpdate(); });
         };
 
 
@@ -1869,7 +1867,6 @@ class TableManager {
 
 
         // --- Initial Fill ---
-        // Call fillSlider for each pair after setup
         fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
         fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
