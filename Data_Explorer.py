@@ -610,8 +610,6 @@ css = """
         min-height: 120px;
         display: flex;
         flex-direction: row;
-        align-items: center;
-        overflow-x: auto;
     }
 
     .reset-wrapper {
@@ -947,26 +945,7 @@ css = """
         font-size: 1.2em;
         color: #555;
     }
-    
-    .hidden { 
-        display: none; 
-    }
-    
-    .table-footer {
-        margin-top: 20px;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        column-gap: 10px;
-    }
-    
-    .table-footer p {
-        font-family: 'Poppins';
-        font-size: small;
-        color: white;
-        margin: 0;
-    }
-    
+    .hidden { display: none; }
 </style>
 """
 
@@ -1170,10 +1149,6 @@ class TableManager {
                     <div id="page-numbers" class="page-numbers"></div>
                     <button id="next-page" class="page-btn" aria-label="Next page">&gt;</button>
                 </div>
-            </div>
-            <div class="table-footer">
-                <p>All amounts are in USD unless otherwise specified.</p>
-                <p>Data last updated on: 2025-03-12</p>
             </div>
         `;
     }
@@ -1903,6 +1878,7 @@ Streamlit.setComponentReady();
 
 # --- Create Component Instance ---
 table_component = generate_component('kickstarter_table', template=css, script=script)
+
 
 # --- Main App Logic ---
 
