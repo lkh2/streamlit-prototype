@@ -1832,25 +1832,34 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 
 # --- Main App Logic ---
 
-# 1. Get component state (filter/sort/page changes from JS)
+# 1. Prepare default state and potentially retrieve the last state sent from the component
 # Use a default dictionary structure matching what JS sends
 default_state = {
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order
 }
-component_value = table_component(component_data={}, key="kickstarter_state", default=default_state) # Pass empty initial data, state comes from component_value
+# This variable will hold the state *sent from* the component on the *previous* run,
+# or default_state on the first run or if the component didn't send anything.
+component_value = st.session_state.get("kickstarter_state_value", default_state)
 
 
-# 2. Update Streamlit session state based on component value
-if component_value != default_state : # Check if the state actually changed
+# 2. Update Streamlit session state based on the component value *from the previous run*
+# Check if the received value is different from the current session state to avoid unnecessary updates
+# (Though Streamlit handles reruns, this can sometimes help logic flow)
+if component_value.get("page") != st.session_state.current_page or \
+   component_value.get("filters") != st.session_state.filters or \
+   component_value.get("sort_order") != st.session_state.sort_order:
     print("Received new state from component:", component_value)
-    st.session_state.current_page = component_value.get("page", 1)
-    st.session_state.filters = component_value.get("filters", st.session_state.filters) # Keep old filters if none sent
+    st.session_state.current_page = component_value.get("page", st.session_state.current_page)
+    st.session_state.filters = component_value.get("filters", st.session_state.filters)
     st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
+    # If state changed based on component value, force a recalculation/refetch even if component_value == default_state initially
+    # (This path is less likely now with the structure, but belt-and-suspenders)
+    pass # Logic proceeds to recalculate below
 
 
-# 3. Apply filters and sorting to the base LazyFrame
+# 3. Apply filters and sorting to the base LazyFrame (using updated session state)
 print(f"Applying filters: {st.session_state.filters}")
 print(f"Applying sort: {st.session_state.sort_order}")
 filtered_lf = apply_filters_and_sort(
@@ -1873,7 +1882,7 @@ except Exception as e:
     st.session_state.total_rows = 0 # Set to 0 on error
 
 # 5. Calculate pagination details
-total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE)
+total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1)) # Clamp page number
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
@@ -1896,13 +1905,13 @@ else:
 # 7. Generate HTML for the fetched page
 header_html, rows_html = generate_table_html_for_page(df_page)
 
-# 8. Prepare data payload for the component
+# 8. Prepare data payload for the component *for this run*
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
     "total_rows": st.session_state.total_rows,
-    "filters": st.session_state.filters,
-    "sort_order": st.session_state.sort_order,
+    "filters": st.session_state.filters, # Send the current filters
+    "sort_order": st.session_state.sort_order, # Send the current sort order
     "header_html": header_html,
     "rows_html": rows_html,
     # Pass necessary options/metadata for UI rendering
@@ -1911,8 +1920,17 @@ component_data_payload = {
     "min_max_values": min_max_values,
 }
 
-# 9. Render the component *again* with the updated data
-# The key must remain the same ("kickstarter_state") for Streamlit to handle the component value correctly
-print("Rendering component with updated data...")
-# No need to capture the return value here again, we already did at the start of the script run
-table_component(component_data=component_data_payload, key="kickstarter_state", default=default_state)
+# 9. Render the component ONCE, sending the payload and potentially getting the next state
+print("Rendering component...")
+# This single call sends the 'component_data_payload' to the frontend for the *current* render.
+# It returns the value that was set by 'Streamlit.setComponentValue' on the *previous* interaction in the frontend.
+# We store this returned value in session state to process it at the *start* of the *next* script run.
+st.session_state.kickstarter_state_value = table_component(
+    component_data=component_data_payload,
+    key="kickstarter_state", # The single key for this component instance
+    default=default_state # Default value if component hasn't sent anything yet
+)
+
+print(f"--- Script execution finished for page {st.session_state.current_page} ---")
+# Remove the second call to table_component
+# table_component(component_data=component_data_payload, key="kickstarter_state", default=default_state)
