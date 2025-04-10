@@ -1834,8 +1834,7 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 
 # --- Main App Logic ---
 
-# 1. Prepare default state and potentially retrieve the last state sent from the component
-# Use a default dictionary structure matching what JS sends and session state init
+# 1. Prepare default state dictionary (used for initial state and component default)
 default_state = {
     "page": 1, # Sensible default page
     "filters": { # Default filters matching session state init
@@ -1854,23 +1853,64 @@ default_state = {
     "sort_order": 'popularity' # Default sort matching session state init
 }
 
-# Get the value sent by the component *last time*, default if nothing sent yet
+# Initialize session state keys if they don't exist, using defaults
+st.session_state.setdefault('current_page', default_state['page'])
+st.session_state.setdefault('filters', default_state['filters'])
+st.session_state.setdefault('sort_order', default_state['sort_order'])
+st.session_state.setdefault('total_rows', 0)
+# kickstarter_state_value will be set by the component call later or default
+
+# Get the value sent by the component *last time*
+# Use default_state as fallback ONLY if kickstarter_state_value hasn't been set at all
 component_value = st.session_state.get("kickstarter_state_value", default_state)
-print(f"Received component value from previous run: {json.dumps(component_value)}") # Log received value
+print(f"Received component value from previous run: {json.dumps(component_value)}")
 
+# 2. Update Streamlit session state based on the value received *from the component*
+# Store the state *before* potential updates for comparison/logging if needed
+prev_page = st.session_state.current_page
+prev_filters = st.session_state.filters
+prev_sort = st.session_state.sort_order
 
-# 2. Update Streamlit session state *based on the value received from the component*
-# This ensures that user interactions drive the state for the current run.
-# Use .get() with fallbacks to the current session state values if component_value is incomplete
-# Use default_state values as final fallback for robustness on first run or errors
-st.session_state.current_page = component_value.get("page", st.session_state.get('current_page', default_state['page']))
-st.session_state.filters = component_value.get("filters", st.session_state.get('filters', default_state['filters']))
-st.session_state.sort_order = component_value.get("sort_order", st.session_state.get('sort_order', default_state['sort_order']))
+if isinstance(component_value, dict): # Ensure we got a dictionary
+    # Update page, falling back to current state if key missing in component_value
+    st.session_state.current_page = component_value.get("page", st.session_state.current_page)
+
+    # Update filters: Replace entirely if component sent a valid dict, else keep current
+    new_filters = component_value.get("filters")
+    if isinstance(new_filters, dict):
+         # Basic validation: check if essential keys exist before assigning
+         if all(k in new_filters for k in ['search', 'categories', 'subcategories', 'countries', 'states', 'date', 'ranges']):
+             st.session_state.filters = new_filters
+         else:
+             print("Warning: 'filters' dict from component_value missing keys, keeping existing session state filters.")
+    else:
+         # If component didn't send filters or sent wrong type, keep existing
+         print("Warning: 'filters' key missing or not a dict in component_value, keeping existing session state filters.")
+         pass # Keep st.session_state.filters as is
+
+    # Update sort order, falling back to current state if key missing
+    st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
+
+    # Log if state changed
+    state_changed_log = (
+        st.session_state.current_page != prev_page or
+        json.dumps(st.session_state.filters, sort_keys=True) != json.dumps(prev_filters, sort_keys=True) or
+        st.session_state.sort_order != prev_sort
+    )
+    if state_changed_log:
+        print("Session state updated based on component value.")
+    else:
+        print("Session state remains unchanged after processing component value.")
+
+else:
+    # This might happen on the very first run if default isn't passed correctly,
+    # or if component sends non-dict value. Rely on initialized session state.
+    print("Warning: component_value was not a dictionary, relying on existing session state.")
+    pass
+
 
 # --- REMOVED RERUN LOGIC ---
-# The comparison and st.rerun() based on state_changed are removed.
-# We directly proceed to use the potentially updated session state below.
-print("Proceeding with script execution using potentially updated state")
+print("Proceeding with script execution using current state")
 print(f"Current Page: {st.session_state.current_page}, Filters: {json.dumps(st.session_state.filters)}, Sort: {st.session_state.sort_order}")
 
 
@@ -1952,18 +1992,16 @@ component_data_payload = {
 
 # 10. Render the component ONCE, sending the payload and potentially getting the next state request
 print("Rendering component...")
-# This single call sends the 'component_data_payload' to the frontend for the *current* render.
-# It returns the value that was set by 'Streamlit.setComponentValue' on the *previous* interaction in the frontend.
-# We store this returned value in session state to process it at the *start* of the *next* script run.
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # The single key for this component instance
-    default=default_state # Default value if component hasn't sent anything yet (first run)
+    default=None # Use None default, rely on session state init and .get for component_value
 )
 
 # Store the *raw* value received from the component for the next run's Step 1
-st.session_state.kickstarter_state_value = component_return_value
-print(f"Stored component return value for next run: {json.dumps(component_return_value)}") # Log stored value
+# Use default_state if component sends back None (e.g., on first load before interaction)
+st.session_state.kickstarter_state_value = component_return_value if component_return_value is not None else default_state
+print(f"Stored component return value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
 
 # Optional: Add a small footer to show the current state for debugging
 # st.markdown("---")
