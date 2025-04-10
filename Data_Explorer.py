@@ -945,26 +945,7 @@ css = """
         font-size: 1.2em;
         color: #555;
     }
-    .hidden { 
-        display: none; 
-    }
-
-    .category-option.disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-        pointer-events: none; /* Prevent clicks */
-        background-color: #f8f8f8 !important; /* Override hover effects */
-        color: #999 !important;
-    }
-
-    #categoryFilterBtn.disabled {
-        opacity: 0.6;
-        cursor: not-allowed;
-        pointer-events: none; /* Also prevents dropdown from opening */
-        background-color: #f0f0f0; /* A slightly grey background */
-        color: #999; /* Grey text */
-    }
-
+    .hidden { display: none; }
 </style>
 """
 
@@ -997,6 +978,19 @@ class TableManager {
         this.filterOptions = initialData.filter_options || {};
         this.categorySubcategoryMap = initialData.category_subcategory_map || {};
         this.minMaxValues = initialData.min_max_values || {};
+
+        this.subcategoryParentMap = {};
+        for (const category in this.categorySubcategoryMap) {
+            if (category !== 'All Categories' && Array.isArray(this.categorySubcategoryMap[category])) {
+                this.categorySubcategoryMap[category].forEach(subcategory => {
+                    if (subcategory !== 'All Subcategories') {
+                        // Allow overriding if a subcategory appears under multiple parents?
+                        // For now, the last one wins. Consider if this needs refinement.
+                        this.subcategoryParentMap[subcategory] = category;
+                    }
+                });
+            }
+        }
 
         this.renderHTMLStructure(initialData.header_html);
         this.bindStaticElements();
@@ -1197,26 +1191,22 @@ class TableManager {
         this.stateBtn = document.getElementById('stateFilterBtn');
 
         this.setupMultiSelect(
+            'category',
             document.querySelectorAll('#categoryOptionsContainer .category-option'),
             this.selectedCategories,
             'All Categories',
-            this.categoryBtn,
-            'category'
+            this.categoryBtn
         );
         this.updateSubcategoryOptions();
         this.setupMultiSelect(
-             document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'),
-             this.selectedSubcategories,
-             'All Subcategories',
-             this.subcategoryBtn
-        );
-        this.setupMultiSelect(
+            'country',
             document.querySelectorAll('#countryOptionsContainer .country-option'),
             this.selectedCountries,
             'All Countries',
             this.countryBtn
         );
          this.setupMultiSelect(
+             'state',
              document.querySelectorAll('#stateOptionsContainer .state-option'),
              this.selectedStates,
              'All States',
@@ -1235,8 +1225,8 @@ class TableManager {
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = this.currentSort;
 
-         const dateSelect = document.getElementById('dateFilter');
-         if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
+        const dateSelect = document.getElementById('dateFilter');
+        if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
@@ -1244,24 +1234,28 @@ class TableManager {
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
         this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions();
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
         this.setupMultiSelect(
+            'category',
             document.querySelectorAll('#categoryOptionsContainer .category-option'),
             this.selectedCategories,
             'All Categories',
-            this.categoryBtn,
-            'category'
+            this.categoryBtn
         );
+
+        this.updateSubcategoryOptions();
+
         this.setupMultiSelect(
+            'country',
             document.querySelectorAll('#countryOptionsContainer .country-option'),
             this.selectedCountries,
             'All Countries',
             this.countryBtn
         );
          this.setupMultiSelect(
+             'state',
              document.querySelectorAll('#stateOptionsContainer .state-option'),
              this.selectedStates,
              'All States',
@@ -1302,7 +1296,7 @@ class TableManager {
     }
 
     updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
-         if (!options || options.length === 0 || !selectedSet || !buttonElement) return;
+         if (!options || options.length === 0 || !selectedSet) return;
          options.forEach(option => {
             const isSelected = selectedSet.has(option.dataset.value);
             option.classList.toggle('selected', isSelected);
@@ -1464,12 +1458,6 @@ class TableManager {
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-         const resetStatePayload = {
-             page: defaultPage,
-             filters: JSON.parse(JSON.stringify(defaultFilters)),
-             sort_order: defaultSort
-         };
-
         this.currentPage = defaultPage;
         this.currentSort = defaultSort;
         this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
@@ -1485,19 +1473,14 @@ class TableManager {
         if (dateSelect) dateSelect.value = defaultFilters.date;
 
         this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions();
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
-        this.setupMultiSelect(
-            document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn, 'category'
-        );
-        this.setupMultiSelect(
-            document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn, 'country'
-        );
-        this.setupMultiSelect(
-             document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn, 'state'
-         );
+        this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
+        this.setupMultiSelect('country', document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn);
+        this.setupMultiSelect('state', document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn);
+
+        this.updateSubcategoryOptions(); 
 
         if (defaultFilters.ranges && this.rangeSliderElements) {
              const { ranges } = defaultFilters;
@@ -1521,6 +1504,12 @@ class TableManager {
                   fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
              }
         }
+
+        const resetStatePayload = {
+            page: defaultPage,
+            filters: defaultFilters,
+            sort_order: defaultSort
+        };
         this.showLoading(true);
         Streamlit.setComponentValue(resetStatePayload);
     }
@@ -1554,28 +1543,25 @@ class TableManager {
          }
     }
 
-    setupMultiSelect(options, selectedSet, allValue, buttonElement, typeIdentifier) {
-        if (!options || options.length === 0 || !selectedSet || !buttonElement) return;
+    setupMultiSelect(type, options, selectedSet, allValue, buttonElement) {
+        if (!options || options.length === 0 || !selectedSet || !buttonElement) {
+             return;
+        }
 
         options.forEach(option => {
             const newOption = option.cloneNode(true);
             option.parentNode.replaceChild(newOption, option);
 
-             if (selectedSet.has(newOption.dataset.value)) {
+            if (selectedSet.has(newOption.dataset.value)) {
                  newOption.classList.add('selected');
              } else {
                  newOption.classList.remove('selected');
              }
 
              newOption.addEventListener('click', (e) => {
-                if (typeIdentifier === 'category' && e.target.classList.contains('disabled')) {
-                    console.log("Category selection disabled.");
-                    return;
-                }
-
                 const clickedValue = e.target.dataset.value;
                 const isCurrentlySelected = e.target.classList.contains('selected');
-                const currentOptions = e.target.parentElement.querySelectorAll('[data-value]');
+                const currentOptions = Array.from(e.target.parentElement.querySelectorAll('[data-value]'));
 
                 if (clickedValue === allValue) {
                     selectedSet.clear();
@@ -1583,38 +1569,48 @@ class TableManager {
                     currentOptions.forEach(opt => opt.classList.remove('selected'));
                     e.target.classList.add('selected');
                 } else {
-                    const currentAllOption = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
-                    if (currentAllOption && currentAllOption.classList.contains('selected')) {
+                    const allOptionElement = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
+                    if (allOptionElement && selectedSet.has(allValue)) {
                         selectedSet.delete(allValue);
-                        currentAllOption.classList.remove('selected');
+                        if (allOptionElement) allOptionElement.classList.remove('selected');
                     }
 
-                    e.target.classList.toggle('selected');
-                    if (e.target.classList.contains('selected')) {
-                        selectedSet.add(clickedValue);
-                    } else {
+                    if (isCurrentlySelected) {
                         selectedSet.delete(clickedValue);
+                        e.target.classList.remove('selected');
+                    } else {
+                        selectedSet.add(clickedValue);
+                        e.target.classList.add('selected');
                     }
 
-                    const anySpecificSelected = Array.from(selectedSet).some(item => item !== allValue);
-                    if (!anySpecificSelected && selectedSet.size === 0) {
+                    const hasSpecificSelection = Array.from(selectedSet).some(item => item !== allValue);
+                    if (!hasSpecificSelection) {
                          selectedSet.clear();
                          selectedSet.add(allValue);
-                         if (currentAllOption) currentAllOption.classList.add('selected');
+                         if (allOptionElement) allOptionElement.classList.add('selected');
                          currentOptions.forEach(opt => {
-                              if(opt.dataset.value !== allValue) opt.classList.remove('selected');
+                              if (opt.dataset.value !== allValue) opt.classList.remove('selected');
                          });
                     }
                 }
 
-                this.updateButtonText(selectedSet, buttonElement, allValue);
-
-                if (typeIdentifier === 'category') {
-                    this.updateSubcategoryOptions();
-                } else if (typeIdentifier === 'subcategory') {
-                    this.updateCategoryInteractionState();
+                if (type === 'category') {
+                    this.updateSubcategoryOptions(); 
+                } else if (type === 'subcategory') {
+                    if (clickedValue !== allValue && !isCurrentlySelected) {
+                        const parentCategory = this.subcategoryParentMap[clickedValue];
+                        if (parentCategory && !this.selectedCategories.has(parentCategory)) {
+                             if (this.selectedCategories.has('All Categories')) {
+                                 this.selectedCategories.delete('All Categories');
+                             }
+                             this.selectedCategories.add(parentCategory);
+                             this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+                             this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
+                        }
+                    }
                 }
 
+                this.updateButtonText(selectedSet, buttonElement, allValue);
                 this.currentPage = 1;
                 this.requestUpdate();
             });
@@ -1625,29 +1621,44 @@ class TableManager {
 
 
     updateSubcategoryOptions() {
-        const selectedCategories = this.selectedCategories || new Set(['All Categories']);
-        const subcategoryMap = this.categorySubcategoryMap || {};
         const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
-        const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories) {
-            console.error("Missing elements for subcategory update:", subcategoryOptionsContainer, subcategoryBtn, this.selectedSubcategories);
+        const subcategoryBtn = document.getElementById('subcategoryFilterBtn'); 
+        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories || !this.categorySubcategoryMap) {
+            console.warn("Cannot update subcategory options - missing elements or data.");
             return;
         }
 
-        let isAllCategoriesSelected = selectedCategories.has('All Categories');
-        let availableSubcategories = new Set();
+        const isAllCategoriesSelected = this.selectedCategories.has('All Categories');
+        let availableSubcategories = new Set(['All Subcategories']); 
 
-        if (isAllCategoriesSelected || selectedCategories.size === 0) {
-             (subcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
+        if (isAllCategoriesSelected || this.selectedCategories.size === 0) {
+             (this.categorySubcategoryMap['All Categories'] || []).forEach(subcat => {
+                 if (subcat !== 'All Subcategories') availableSubcategories.add(subcat);
+            });
         } else {
-             availableSubcategories.add('All Subcategories');
-             selectedCategories.forEach(cat => {
-                 (subcategoryMap[cat] || []).forEach(subcat => {
-                      if (subcat !== 'All Subcategories') {
-                         availableSubcategories.add(subcat);
-                      }
-                 });
-             });
+            this.selectedCategories.forEach(cat => {
+                (this.categorySubcategoryMap[cat] || []).forEach(subcat => {
+                    if (subcat !== 'All Subcategories') availableSubcategories.add(subcat);
+                });
+            });
+        }
+
+        let changedSelection = false;
+        const currentSelectedSubs = Array.from(this.selectedSubcategories);
+        currentSelectedSubs.forEach(subcat => {
+            if (subcat !== 'All Subcategories' && !availableSubcategories.has(subcat)) {
+                this.selectedSubcategories.delete(subcat);
+                changedSelection = true;
+            }
+        });
+
+        const hasSpecificSelection = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
+        if ((changedSelection && !hasSpecificSelection) || this.selectedSubcategories.size === 0) {
+             this.selectedSubcategories.clear();
+             this.selectedSubcategories.add('All Subcategories');
+        }
+        if (!hasSpecificSelection && !this.selectedSubcategories.has('All Subcategories')) {
+            this.selectedSubcategories.add('All Subcategories');
         }
 
         const sortedSubcategories = Array.from(availableSubcategories);
@@ -1657,28 +1668,6 @@ class TableManager {
             return a.localeCompare(b);
         });
 
-        const availableSubSet = new Set(sortedSubcategories);
-        let selectionChanged = false;
-        const currentSelectedSubcategories = Array.from(this.selectedSubcategories);
-
-        for (const subcat of currentSelectedSubcategories) {
-            if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
-                this.selectedSubcategories.delete(subcat);
-                selectionChanged = true;
-            }
-        }
-
-        const hasSpecificSelected = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
-        if (selectionChanged || this.selectedSubcategories.size === 0 || (!hasSpecificSelected && sortedSubcategories.length > 1) ) {
-            const onlyAllSubcatsAvailable = sortedSubcategories.length <= 1 && sortedSubcategories[0] === 'All Subcategories';
-
-            if (!onlyAllSubcatsAvailable || this.selectedSubcategories.size === 0) {
-                this.selectedSubcategories.clear();
-                this.selectedSubcategories.add('All Subcategories');
-                selectionChanged = true;
-            }
-        }
-
         subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
             `<div class="subcategory-option ${this.selectedSubcategories.has(opt) ? 'selected' : ''}" data-value="${opt}">${opt}</div>`
         ).join('');
@@ -1686,43 +1675,12 @@ class TableManager {
         this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
 
         this.setupMultiSelect(
+            'subcategory', 
              subcategoryOptionsContainer.querySelectorAll('.subcategory-option'),
              this.selectedSubcategories,
              'All Subcategories',
-             subcategoryBtn,
-             'subcategory'
+             subcategoryBtn 
          );
-
-         if (selectionChanged) {
-            this.updateCategoryInteractionState();
-         }
-    }
-
-    updateCategoryInteractionState() {
-        const categoryOptions = document.querySelectorAll('#categoryOptionsContainer .category-option');
-        if (!categoryOptions || categoryOptions.length === 0 || !this.selectedSubcategories || !this.categoryBtn) return;
-
-        const hasSpecificSubcategory = Array.from(this.selectedSubcategories).some(sub => sub !== 'All Subcategories');
-
-        if (hasSpecificSubcategory) {
-            categoryOptions.forEach(option => {
-                option.classList.add('disabled');
-            });
-            this.categoryBtn.classList.add('disabled');
-        } else {
-            categoryOptions.forEach(option => {
-                option.classList.remove('disabled');
-            });
-             this.categoryBtn.classList.remove('disabled');
-        }
-
-        this.setupMultiSelect(
-            document.querySelectorAll('#categoryOptionsContainer .category-option'),
-            this.selectedCategories,
-            'All Categories',
-            this.categoryBtn,
-            'category'
-        );
     }
 
     setupRangeSlider() {
@@ -1760,28 +1718,31 @@ class TableManager {
 
             const min = parseFloat(controlSlider.min);
             const max = parseFloat(controlSlider.max);
+            const validMin = isNaN(min) ? 0 : min;
+            const validMax = isNaN(max) ? (validMin + 1) : max; 
+
             const fromVal = parseFloat(from.value);
             const toVal = parseFloat(to.value);
+            const validFromVal = isNaN(fromVal) ? validMin : Math.max(validMin, Math.min(validMax, fromVal));
+            const validToVal = isNaN(toVal) ? validMax : Math.max(validMin, Math.min(validMax, toVal));
 
-            const rangeDistance = max - min;
-            const fromPosition = fromVal - min;
-            const toPosition = toVal - min;
 
-             const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
-             const fromPercent = Math.min(100, Math.max(0, (fromPosition / safeRangeDistance) * 100));
-             const toPercent = Math.min(100, Math.max(0, (toPosition / safeRangeDistance) * 100));
-
-            const finalFromPercent = Math.min(fromPercent, toPercent);
-            const finalToPercent = Math.max(fromPercent, toPercent);
-
+            const rangeDistance = validMax - validMin;
+            const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
+            const displayFromVal = Math.min(validFromVal, validToVal);
+            const displayToVal = Math.max(validFromVal, validToVal);
+            const fromPosition = displayFromVal - validMin;
+            const toPosition = displayToVal - validMin;
+            const fromPercent = Math.min(100, Math.max(0, (fromPosition / safeRangeDistance) * 100));
+            const toPercent = Math.min(100, Math.max(0, (toPosition / safeRangeDistance) * 100));
 
             controlSlider.style.background = `linear-gradient(
                 to right,
                 ${sliderColor} 0%,
-                ${sliderColor} ${finalFromPercent}%,
-                ${rangeColor} ${finalFromPercent}%,
-                ${rangeColor} ${finalToPercent}%,
-                ${sliderColor} ${finalToPercent}%,
+                ${sliderColor} ${fromPercent}%,
+                ${rangeColor} ${fromPercent}%,
+                ${rangeColor} ${toPercent}%,
+                ${sliderColor} ${toPercent}%,
                 ${sliderColor} 100%)`;
         };
 
@@ -1793,21 +1754,21 @@ class TableManager {
         }, 400);
 
 
-        const controlFromInput = (fromSlider, toSlider, fromInput) => {
+        const controlFromInput = (fromSlider, toSlider, fromInput, fillFn) => {
              const minVal = parseFloat(fromSlider.min);
-             const maxVal = parseFloat(toSlider.value);
+             const maxVal = parseFloat(toSlider.value); 
              let fromVal = parseFloat(fromInput.value);
 
              if (isNaN(fromVal) || fromVal < minVal) fromVal = minVal;
              if (fromVal > maxVal) fromVal = maxVal;
 
-             fromInput.value = fromVal;
-             fromSlider.value = fromVal;
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             fromInput.value = fromVal; 
+             fromSlider.value = fromVal; 
+             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider); 
         };
 
-        const controlToInput = (fromSlider, toSlider, toInput) => {
-             const minVal = parseFloat(fromSlider.value);
+        const controlToInput = (fromSlider, toSlider, toInput, fillFn) => {
+             const minVal = parseFloat(fromSlider.value); 
              const maxVal = parseFloat(toSlider.max);
              let toVal = parseFloat(toInput.value);
 
@@ -1816,57 +1777,63 @@ class TableManager {
 
              toInput.value = toVal;
              toSlider.value = toVal;
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider); 
         };
 
-        const controlFromSlider = (fromSlider, toSlider, fromInput) => {
-             const fromVal = parseFloat(fromSlider.value);
-             const toVal = parseFloat(toSlider.value);
-             if (fromVal > toVal) {
-                 fromSlider.value = toVal;
-                 fromInput.value = toVal;
-             } else {
-                 fromInput.value = fromVal;
-             }
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-        };
-
-        const controlToSlider = (fromSlider, toSlider, toInput) => {
+        const controlFromSlider = (fromSlider, toSlider, fromInput, fillFn) => {
              const fromVal = parseFloat(fromSlider.value);
              const toVal = parseFloat(toSlider.value);
              if (fromVal > toVal) {
                  toSlider.value = fromVal;
-                 toInput.value = fromVal;
-             } else {
-                 toInput.value = toVal;
+                 const toInputId = toSlider.id.replace('Slider', 'Input');
+                 const toInput = document.getElementById(toInputId);
+                 if(toInput) toInput.value = fromVal;
              }
-             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             fromInput.value = fromVal;
+             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         };
+
+        const controlToSlider = (fromSlider, toSlider, toInput, fillFn) => {
+             const fromVal = parseFloat(fromSlider.value);
+             const toVal = parseFloat(toSlider.value);
+             if (fromVal > toVal) {
+                 fromSlider.value = toVal;
+                 const fromInputId = fromSlider.id.replace('Slider', 'Input');
+                 const fromInput = document.getElementById(fromInputId);
+                 if(fromInput) fromInput.value = toVal;
+             }
+             toInput.value = toVal;
+             fillFn(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+        };
+
+        const makeControlFn = (controlFn, fillFn) => {
+            return (slider1, slider2, input) => controlFn(slider1, slider2, input, fillFn);
+        };
+
+        const controlFromInputFilled = makeControlFn(controlFromInput, fillSlider);
+        const controlToInputFilled = makeControlFn(controlToInput, fillSlider);
+        const controlFromSliderFilled = makeControlFn(controlFromSlider, fillSlider);
+        const controlToSliderFilled = makeControlFn(controlToSlider, fillSlider);
+
 
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
-            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
-            fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
-            tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+            fSlider.addEventListener('input', () => { controlFromSliderFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tSlider.addEventListener('input', () => { controlToSliderFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+            fInput.addEventListener('input', () => { controlFromInputFilled(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tInput.addEventListener('input', () => { controlToInputFilled(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
         };
-
 
         setupSliderListeners(fromSlider, toSlider, fromInput, toInput);
         setupSliderListeners(goalFromSlider, goalToSlider, goalFromInput, goalToInput);
         setupSliderListeners(raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput);
-
 
         fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
         fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
     }
 
+}
 
-} // End of TableManager class
-
-// --- Streamlit Communication ---
 let tableManagerInstance = null;
 
 function onRender(event) {
