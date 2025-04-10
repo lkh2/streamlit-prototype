@@ -238,14 +238,17 @@ if 'base_lf' not in st.session_state:
 # --- Filtering and Sorting Logic ---
 def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> pl.LazyFrame:
     """Applies filters and sorting to a LazyFrame."""
-
+    
+    # Get column names once to avoid repeated schema resolution
+    available_columns = lf.collect_schema().names()
+    
     # 1. Text Search (Apply across relevant text columns)
     search_term = filters.get('search', '')
     if search_term:
         # Add columns you want to search here
         search_cols = ['Project Name', 'Creator', 'Category', 'Subcategory']
         # Filter columns that actually exist in the frame
-        valid_search_cols = [col for col in search_cols if col in lf.columns]
+        valid_search_cols = [col for col in search_cols if col in available_columns]
         if valid_search_cols:
             search_expr = None
             for col in valid_search_cols:
@@ -260,44 +263,38 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
                  lf = lf.filter(search_expr)
 
     # 2. Categorical Filters
-    if 'Category' in lf.columns and filters['categories'] != ['All Categories']:
+    if 'Category' in available_columns and filters['categories'] != ['All Categories']:
         lf = lf.filter(pl.col('Category').is_in(filters['categories']))
-    if 'Subcategory' in lf.columns and filters['subcategories'] != ['All Subcategories']:
-        # Handle potential interaction with category filter if needed, assuming independent for now
+    if 'Subcategory' in available_columns and filters['subcategories'] != ['All Subcategories']:
         lf = lf.filter(pl.col('Subcategory').is_in(filters['subcategories']))
-    if 'Country' in lf.columns and filters['countries'] != ['All Countries']:
+    if 'Country' in available_columns and filters['countries'] != ['All Countries']:
         lf = lf.filter(pl.col('Country').is_in(filters['countries']))
 
-    # State Filter - Now operates on the raw 'State' column
-    if 'State' in lf.columns and filters['states'] != ['All States']:
-        # Filter using the raw state values, case-insensitively
+    # State Filter
+    if 'State' in available_columns and filters['states'] != ['All States']:
         lf = lf.filter(pl.col('State').cast(pl.Utf8).str.to_lowercase().is_in([s.lower() for s in filters['states']]))
 
     # 3. Range Filters
     ranges = filters.get('ranges', {})
-    if 'Raw Pledged' in lf.columns and 'pledged' in ranges:
+    if 'Raw Pledged' in available_columns and 'pledged' in ranges:
         min_p, max_p = ranges['pledged']['min'], ranges['pledged']['max']
         lf = lf.filter((pl.col('Raw Pledged') >= min_p) & (pl.col('Raw Pledged') <= max_p))
-    if 'Raw Goal' in lf.columns and 'goal' in ranges:
+    if 'Raw Goal' in available_columns and 'goal' in ranges:
         min_g, max_g = ranges['goal']['min'], ranges['goal']['max']
         lf = lf.filter((pl.col('Raw Goal') >= min_g) & (pl.col('Raw Goal') <= max_g))
-    if 'Raw Raised' in lf.columns and 'raised' in ranges:
+    if 'Raw Raised' in available_columns and 'raised' in ranges:
         min_r, max_r = ranges['raised']['min'], ranges['raised']['max']
-        # Handle division by zero for goal if necessary for percentage calculation
-        # Ensure 'Raw Raised' column exists and represents the percentage directly, or calculate it
-        # Assuming 'Raw Raised' IS the percentage already calculated during data processing
         lf = lf.filter((pl.col('Raw Raised') >= min_r) & (pl.col('Raw Raised') <= max_r))
-
 
     # 4. Date Filter
     date_filter = filters.get('date', 'All Time')
-    if date_filter != 'All Time' and 'Raw Date' in lf.columns:
+    if date_filter != 'All Time' and 'Raw Date' in available_columns:
         now = datetime.datetime.now()
         compare_date = None
         if date_filter == 'Last Month':
-            compare_date = now - datetime.timedelta(days=30) # Approximation
+            compare_date = now - datetime.timedelta(days=30)
         elif date_filter == 'Last 6 Months':
-            compare_date = now - datetime.timedelta(days=182) # Approximation
+            compare_date = now - datetime.timedelta(days=182)
         elif date_filter == 'Last Year':
             compare_date = now - datetime.timedelta(days=365)
         elif date_filter == 'Last 5 Years':
@@ -306,11 +303,8 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
             compare_date = now - datetime.timedelta(days=10*365)
 
         if compare_date:
-             # Ensure Raw Date is datetime type before comparison
-             # Use try_cast for robustness if dates might be invalid
              lf = lf.with_columns(pl.col("Raw Date").cast(pl.Datetime, strict=False).alias("Raw Date_dt"))
              lf = lf.filter(pl.col('Raw Date_dt') >= compare_date).drop("Raw Date_dt")
-
 
     # 5. Sorting
     sort_descending = True
@@ -330,13 +324,12 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         sort_descending = True
     elif sort_order == 'enddate':
         sort_col = 'Raw Deadline'
-        sort_descending = True # Assuming latest ending first
+        sort_descending = True
 
-    if sort_col in lf.columns:
+    if sort_col in available_columns:
         lf = lf.sort(sort_col, descending=sort_descending, nulls_last=True)
     else:
         print(f"Warning: Sort column '{sort_col}' not found in LazyFrame.")
-
 
     return lf
 
