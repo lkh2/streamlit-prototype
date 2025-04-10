@@ -622,7 +622,7 @@ css = """
         overflow-y: hidden;
     }
     
-    .filter-wrapper::-webkit-scrollbar-track {
+    .filter-wrapper::-webkit-scrollbar-track, .multi-select-content::-webkit-scrollbar-track {
         -webkit-box-shadow: inset 0 0 6px rgba(0,0,0,0.05);
         border-radius: 10px;
         background-color: white;
@@ -632,8 +632,13 @@ css = """
         height: 8px;
         background-color: transparent;
     }
+    
+    .multi-select-content::-webkit-scrollbar {
+        width: 8px;
+        background-color: transparent;
+    }
 
-    .filter-wrapper::-webkit-scrollbar-thumb {
+    .filter-wrapper::-webkit-scrollbar-thumb, .multi-select-content::-webkit-scrollbar-thumb {
         border-radius: 10px;
         -webkit-box-shadow: inset 0 0 6px rgba(0,0,0,0.05);
         background-color: lightgrey;
@@ -1331,21 +1336,33 @@ class TableManager {
         const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
         const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
 
-        // Default: position below the trigger
-        let top = rect.bottom + 5; // Add 5px buffer
-        let left = rect.left;
-
         // --- Viewport Boundary Checks ---
         const contentWidth = content.offsetWidth;
         const contentHeight = content.offsetHeight;
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
 
-        // Adjust left position if it overflows right edge
+        // Default: position below the trigger
+        let top = rect.bottom + 5; // Add 5px buffer
+        let left; // Initialize left position
+
+        // --- Conditional Left Alignment ---
+        // Check if it's a range dropdown and screen is narrow
+        if (content.classList.contains('range-content') && viewportWidth < 1450) {
+            // Align right edge of content with right edge of trigger
+            left = rect.right - contentWidth;
+        } else {
+            // Default: Align left edge of content with left edge of trigger
+            left = rect.left;
+        }
+
+        // --- Boundary Adjustments (Apply AFTER calculating initial left) ---
+
+        // Adjust left position if it overflows right edge (applies to both alignment cases)
         if (left + contentWidth > viewportWidth - 10) { // 10px buffer
              left = viewportWidth - contentWidth - 10;
         }
-        // Adjust left position if it overflows left edge
+        // Adjust left position if it overflows left edge (applies to both alignment cases)
         if (left < 10) {
              left = 10;
         }
