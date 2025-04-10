@@ -2003,7 +2003,7 @@ filtered_lf = apply_filters_and_sort(
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
-    total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
+    total_rows_result = filtered_lf.select(pl.len()).collect(engine="streaming")
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
@@ -2027,7 +2027,7 @@ if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and 
         if is_state_filter_active:
              print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
 
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True)
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming")
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
         if is_state_filter_active:
