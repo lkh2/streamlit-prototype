@@ -964,7 +964,17 @@ css = """
         font-size: 1.2em;
         color: #555;
     }
-    .hidden { display: none; }
+    
+    .hidden { 
+        display: none; 
+    }
+    
+    @media (max-width: 1350px) {
+        .filter-controls {
+            border-bottom: 1px solid transparent;
+        }
+    }
+    
 </style>
 """
 
