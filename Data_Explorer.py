@@ -361,9 +361,17 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
 
 # --- Generate HTML for the *current page* data ---
 def generate_table_html_for_page(df_page: pl.DataFrame):
+    # Define visible columns *before* checking if df_page is empty
     visible_columns = ['Project Name', 'Creator', 'Pledged Amount', 'Link', 'Country', 'State']
+    header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
 
-    # Check required cols *exist* in the dataframe schema, not necessarily fetched for every row if null
+    # Check if the DataFrame is empty *or* if essential columns are missing
+    # This handles the case where the DataFrame is empty OR has unexpected structure
+    if df_page.is_empty():
+        colspan = len(visible_columns) if visible_columns else 1
+        return header_html, f'<tr><td colspan="{colspan}">No projects match the current filters.</td></tr>'
+
+    # --- Moved Column Check: Only check if df_page is NOT empty ---
     required_data_cols = [
         'Category', 'Subcategory', 'Raw Pledged', 'Raw Goal', 'Raw Raised',
         'Raw Date', 'Raw Deadline', 'Backer Count', 'Popularity Score'
@@ -374,18 +382,18 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
     missing_cols = [col for col in all_needed_cols if col not in df_page.columns]
     if missing_cols:
         st.error(f"FATAL: Missing required columns in fetched data page: {missing_cols}. Check base Parquet schema and processing.")
-        # Return empty if critical columns are missing
-        # Ensure visible_columns only contains existing columns before generating header
-        visible_columns = [col for col in visible_columns if col in df_page.columns]
-        header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
-        return header_html, f'<tr><td colspan="{len(visible_columns) if visible_columns else 1}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
+        colspan = len(visible_columns) if visible_columns else 1
+        # Ensure visible_columns only contains existing columns before generating header for error message
+        header_html_error = ''.join(f'<th scope="col">{col}</th>' for col in visible_columns if col in df_page.columns) # Use available cols for error header
+        return header_html_error, f'<tr><td colspan="{colspan}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
+    # --- End Moved Column Check ---
 
 
-    header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
     rows_html = ''
 
-    if df_page.is_empty():
-        return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
+    # --- Removed redundant empty check, covered above ---
+    # if df_page.is_empty():
+    #     return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
 
     try:
         data_dicts = df_page.to_dicts()
@@ -405,8 +413,10 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
 
         # Data attributes for potential client-side use (though filtering is server-side)
         # Ensure dates are formatted correctly if not None
-        raw_date_str = row.get('Raw Date').strftime('%Y-%m-%d') if row.get('Raw Date') else 'N/A'
-        raw_deadline_str = row.get('Raw Deadline').strftime('%Y-%m-%d') if row.get('Raw Deadline') else 'N/A'
+        raw_date = row.get('Raw Date')
+        raw_deadline = row.get('Raw Deadline')
+        raw_date_str = raw_date.strftime('%Y-%m-%d') if raw_date else 'N/A'
+        raw_deadline_str = raw_deadline.strftime('%Y-%m-%d') if raw_deadline else 'N/A'
         data_attrs = f'''
             data-category="{html.escape(str(row.get('Category', 'N/A')))}"
             data-subcategory="{html.escape(str(row.get('Subcategory', 'N/A')))}"
@@ -614,7 +624,7 @@ css = """
         gap: 0.5rem;
         border-top: 1px solid #eee;
         min-height: 60px;
-        border-radius: 20px;
+        border-radius: 0 0 20px 20px;
     }
 
     .page-numbers {
@@ -1294,16 +1304,44 @@ class TableManager {
          if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
         // -- Update Multi-Selects --
+        // Update the internal sets first
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
+        // Update the visual UI (selected classes and button text)
         this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories
-        this.updateMultiSelectUI(document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'), this.selectedSubcategories, this.subcategoryBtn, 'All Subcategories');
+        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories AND re-binds their listeners via setupMultiSelect inside it
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+        // --- ADDED: Re-bind listeners for Category, Country, State ---
+        // This ensures listeners are active even if updateUIState subtly changed the DOM or state management requires re-binding.
+        // Subcategories are handled within updateSubcategoryOptions.
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'),
+            this.selectedCategories,
+            'All Categories',
+            this.categoryBtn,
+            true // Keep triggerSubcategoryUpdate = true for categories
+        );
+        this.setupMultiSelect(
+            document.querySelectorAll('#countryOptionsContainer .country-option'),
+            this.selectedCountries,
+            'All Countries',
+            this.countryBtn
+            // No trigger needed
+        );
+         this.setupMultiSelect(
+             document.querySelectorAll('#stateOptionsContainer .state-option'),
+             this.selectedStates,
+             'All States',
+             this.stateBtn
+             // No trigger needed
+         );
+        // --- END ADDED SECTION ---
+
 
         // -- Update Range Sliders --
         if (this.currentFilters.ranges && this.rangeSliderElements) {
@@ -1403,39 +1441,74 @@ class TableManager {
     }
 
     updatePagination() {
-        const totalPages = Math.max(1, Math.ceil(this.totalRows / this.pageSize));
-        const pageNumbers = this.generatePageNumbers(totalPages);
+        console.log("--- Entering updatePagination ---"); // Log entry
+
+        // --- Explicitly parse numbers and log inputs ---
+        const currentTotalRows = parseInt(this.totalRows || 0, 10); // Default to 0 if undefined/null/NaN after parse
+        const currentPageSize = parseInt(this.pageSize || 10, 10); // Default to 10
+        console.log(`updatePagination: Using parsed totalRows=${currentTotalRows}, pageSize=${currentPageSize}`);
+
+        // --- Perform calculation and log intermediate ---
+        let calculatedPages = 1; // Default to 1 page
+        if (currentPageSize > 0) {
+             calculatedPages = Math.ceil(currentTotalRows / currentPageSize);
+             console.log(`updatePagination: Raw calculated pages (ceil(total/size)) = ${calculatedPages}`);
+        } else {
+             console.log(`updatePagination: Page size is 0 or invalid, defaulting to 1 page.`);
+        }
+
+        // Ensure at least 1 page even if totalRows is 0
+        const totalPages = Math.max(1, calculatedPages);
+        console.log(`updatePagination: Final totalPages (max(1, calculated)) = ${totalPages}`);
+
+
+        const pageNumbers = this.generatePageNumbers(totalPages); // Pass the final calculated totalPages
         const container = document.getElementById('page-numbers');
-        if (!container) return;
+        if (!container) {
+            console.error("Pagination container 'page-numbers' not found!"); // Add error log
+             console.log("--- Exiting updatePagination (Error) ---");
+             return;
+         }
 
         container.innerHTML = pageNumbers.map(page => {
             if (page === '...') {
                 return '<span class="page-ellipsis">...</span>';
             }
-            // Use event listeners instead of inline onclick for better management
             const button = document.createElement('button');
             button.className = `page-number ${page === this.currentPage ? 'active' : ''}`;
             button.textContent = page;
             button.disabled = page === this.currentPage;
-            button.dataset.page = page; // Store page number in data attribute
-            return button.outerHTML; // Return HTML string
+            button.dataset.page = page;
+            return button.outerHTML;
         }).join('');
 
         // Add event listener to the container for delegation
-        // Ensure handlePageClick is bound to the instance 'this'
-        if (!this.handlePageClick) { // Define only once
+        if (!this.handlePageClick) {
              this.handlePageClick = (event) => {
                  if (event.target.classList.contains('page-number') && !event.target.disabled) {
                      this.goToPage(parseInt(event.target.dataset.page));
                  }
              };
         }
-        container.removeEventListener('click', this.handlePageClick); // Remove previous listener if any
+        container.removeEventListener('click', this.handlePageClick);
         container.addEventListener('click', this.handlePageClick);
 
+        // --- Get button elements AFTER generating HTML ---
+        const prevButton = document.getElementById('prev-page');
+        const nextButton = document.getElementById('next-page');
 
-        document.getElementById('prev-page').disabled = this.currentPage <= 1;
-        document.getElementById('next-page').disabled = this.currentPage >= totalPages;
+        if (prevButton) {
+            prevButton.disabled = this.currentPage <= 1;
+        } else {
+            console.error("Previous page button not found!");
+        }
+        if (nextButton) {
+            nextButton.disabled = this.currentPage >= totalPages;
+        } else {
+            console.error("Next page button not found!");
+        }
+
+        console.log("--- Exiting updatePagination ---"); // Log exit
     }
 
     generatePageNumbers(totalPages) {
@@ -1499,32 +1572,80 @@ class TableManager {
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-        // Reset internal JS state FIRST
+        // --- Create the state payload FIRST ---
+         const resetStatePayload = {
+             page: defaultPage,
+             filters: JSON.parse(JSON.stringify(defaultFilters)), // Use deep copy
+             sort_order: defaultSort
+         };
+         console.log("Reset button clicked. Target state:", resetStatePayload);
+
+         // --- Proceed with reset ---
+        console.log("Resetting internal JS state and UI elements visually...");
+
+        // Reset internal JS state
         this.currentPage = defaultPage;
         this.currentSort = defaultSort;
-        // Use a deep copy to avoid accidental mutation later
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
+        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters)); // Deep copy again
         this.selectedCategories = new Set(defaultFilters.categories);
         this.selectedSubcategories = new Set(defaultFilters.subcategories);
         this.selectedCountries = new Set(defaultFilters.countries);
         this.selectedStates = new Set(defaultFilters.states);
 
-        // Show loading indicator immediately
+        // --- Explicit UI Update ---
+        // (Keep the UI update code as it was)
+        if (this.searchInput) this.searchInput.value = defaultFilters.search;
+        const sortSelect = document.getElementById('sortFilter');
+        if (sortSelect) sortSelect.value = defaultSort;
+        const dateSelect = document.getElementById('dateFilter');
+        if (dateSelect) dateSelect.value = defaultFilters.date;
+
+        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+        this.updateSubcategoryOptions();
+        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
+        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn, true
+        );
+        this.setupMultiSelect(
+            document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn
+        );
+        this.setupMultiSelect(
+             document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn
+         );
+
+        if (defaultFilters.ranges && this.rangeSliderElements) {
+             const { ranges } = defaultFilters;
+             const { fromSlider, toSlider, fromInput, toInput,
+                     goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+                     raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+                     fillSlider } = this.rangeSliderElements;
+             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
+                 fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
+                 fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
+                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             }
+             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
+                 goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
+                 goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
+                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+             }
+             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
+                  raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
+                  raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
+                  fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+             }
+        }
+        console.log("UI elements visually reset.");
+        // --- END UI Update code ---
+
+        // Show loading indicator
         this.showLoading(true);
 
-        // Construct the state object to send to Python, using the internally reset values
-        const resetStatePayload = {
-            page: this.currentPage,
-            filters: this.currentFilters,
-            sort_order: this.currentSort
-        };
+        // Send the reset state payload to Python
         console.log("Resetting state. Sending payload to Python:", resetStatePayload);
         Streamlit.setComponentValue(resetStatePayload);
-
-        // --- REMOVED --- Explicit UI element updates are removed from here.
-        // The UI will be updated visually when Python sends back the
-        // reset data via the onRender -> updateUIState flow.
-        // --- REMOVED --- this.requestUpdate();
     }
 
 
@@ -1785,15 +1906,15 @@ class TableManager {
         // Store the fillSlider function in the shared object
         this.rangeSliderElements.fillSlider = fillSlider;
 
-        // --- Debounced Update Request ---
-        // Use a single debounced function for all slider/input changes
+        // --- REINTRODUCED Debounced Update Request ---
         const debouncedRangeUpdate = debounce(() => {
             this.currentPage = 1; // Reset page on range change
             this.requestUpdate();
-        }, 600); // Slightly longer debounce for sliders
+        }, 400); // Debounce update request by 400ms
 
 
         // --- Control Logic (Handles Slider/Input Interactions) ---
+        // (Control functions remain the same)
         const controlFromInput = (fromSlider, toSlider, fromInput) => {
              const minVal = parseFloat(fromSlider.min);
              const maxVal = parseFloat(toSlider.value); // Use other slider's current value as max constraint
@@ -1847,19 +1968,17 @@ class TableManager {
         // --- Event Listener Setup ---
         const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
             // 'input' event for immediate visual feedback during sliding/typing
-            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); });
-            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); });
-            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); });
-            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); });
+            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+            fInput.addEventListener('input', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
+            tInput.addEventListener('input', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
 
-            // Use 'change' event on sliders to trigger the debounced update (fires when user releases thumb)
-            fSlider.addEventListener('change', debouncedRangeUpdate);
-            tSlider.addEventListener('change', debouncedRangeUpdate);
-
-            // Use 'change' event on inputs to trigger update (fires on blur or Enter)
-            // This also helps validate final typed values.
+            // Use 'change' event on inputs to ensure final value is sent *if* user types then clicks away
+            // Debounce this as well, or send immediately? Let's debounce to be consistent.
             fInput.addEventListener('change', () => { controlFromInput(fSlider, tSlider, fInput); debouncedRangeUpdate(); });
             tInput.addEventListener('change', () => { controlToInput(fSlider, tSlider, tInput); debouncedRangeUpdate(); });
+
+             // No need for 'change' on sliders if 'input' is already debouncing the update
         };
 
 
@@ -1869,7 +1988,6 @@ class TableManager {
 
 
         // --- Initial Fill ---
-        // Call fillSlider for each pair after setup
         fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
         fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
         fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
@@ -1948,62 +2066,84 @@ table_component = generate_component('kickstarter_table', template=css, script=s
 component_state_from_last_run = st.session_state.get("kickstarter_state_value", None) # Default to None
 print(f"Start of Run: Received component value from previous run: {json.dumps(component_state_from_last_run)}")
 
-# Get the state that was SENT to the component in the previous run
+# Get the state that was SENT to the component in the *previous* run
 state_sent_last_run = st.session_state.get('state_sent_to_component', DEFAULT_COMPONENT_STATE)
 
-# 2. Check if the component actually sent back a *new* state.
-#    Compare the received state with the state we last sent TO the component.
-#    Use JSON dumps for reliable comparison of nested dicts/lists.
+
+# 2. Determine if session state needs updating based on component's last message
 component_sent_new_state = False
 if component_state_from_last_run is not None:
     try:
-        # Normalize by dumping to JSON and reloading (handles potential type differences if careful)
-        # Or just compare JSON strings directly
         last_run_str = json.dumps(component_state_from_last_run, sort_keys=True)
         sent_last_run_str = json.dumps(state_sent_last_run, sort_keys=True)
-
         if last_run_str != sent_last_run_str:
             component_sent_new_state = True
-            print(f"State received ({last_run_str}) is DIFFERENT from state sent last run ({sent_last_run_str}).")
+            print(f"State received is DIFFERENT from state sent last run.")
         else:
-             print(f"State received ({last_run_str}) is THE SAME as state sent last run ({sent_last_run_str}).")
-
+            print(f"State received is THE SAME as state sent last run.")
     except TypeError as e:
          print(f"Error comparing states using JSON: {e}. Assuming state is new.")
-         # Fallback: Treat as new state if comparison fails
-         component_sent_new_state = True
+         component_sent_new_state = True # Fallback
 else:
      print("No state received from component in the last run (value is None).")
 
 
+# 3. Update session state *only if* the component sent a genuinely new state
 if component_sent_new_state:
-    print("Component sent NEW state. Updating session state.")
-    # Update Streamlit's internal session state based on the received component value.
+    print("Component sent NEW state. Attempting to update session state.")
     # Validate the received structure before updating
     if (isinstance(component_state_from_last_run, dict) and
             "page" in component_state_from_last_run and
             "sort_order" in component_state_from_last_run and
             "filters" in component_state_from_last_run and
-            isinstance(component_state_from_last_run.get("filters"), dict) and
-            all(k in component_state_from_last_run["filters"] for k in DEFAULT_FILTERS.keys())):
+            isinstance(component_state_from_last_run.get("filters"), dict)):
 
+        # Safely update, ensuring all filter keys/structure persist
         st.session_state.current_page = component_state_from_last_run["page"]
         st.session_state.sort_order = component_state_from_last_run["sort_order"]
-        st.session_state.filters = component_state_from_last_run["filters"]
+
+        new_filters = component_state_from_last_run["filters"]
+        validated_filters = DEFAULT_FILTERS.copy() # Start with defaults
+        for key, default_value in DEFAULT_FILTERS.items():
+            if key in new_filters:
+                # Basic type/structure validation before assigning
+                if key == 'ranges':
+                     if isinstance(new_filters[key], dict):
+                         validated_range = default_value.copy()
+                         for r_key, r_default in default_value.items():
+                             if r_key in new_filters[key] and isinstance(new_filters[key].get(r_key), dict) and all(k in new_filters[key][r_key] for k in ['min', 'max']):
+                                 # Add type check/conversion for min/max
+                                 try:
+                                     min_val = float(new_filters[key][r_key]['min'])
+                                     max_val = float(new_filters[key][r_key]['max'])
+                                     validated_range[r_key] = {'min': min_val, 'max': max_val}
+                                 except (ValueError, TypeError):
+                                      print(f"Warning: Invalid min/max value type for range '{r_key}'. Using default.")
+                             else:
+                                  print(f"Warning: Invalid structure/keys for range '{r_key}'. Using default.")
+                         validated_filters[key] = validated_range
+                     else:
+                         print(f"Warning: Invalid type for 'ranges'. Using default.")
+                elif isinstance(new_filters.get(key), type(default_value)): # Use get for safety
+                     validated_filters[key] = new_filters[key]
+                else:
+                     print(f"Warning: Type mismatch for filter '{key}'. Using default.")
+            else:
+                 print(f"Warning: Key '{key}' missing in received filters. Using default.")
+
+        st.session_state.filters = validated_filters
         print("Session state updated successfully from component state.")
     else:
         print(f"Warning: Invalid structure in new component state: {component_state_from_last_run}. NOT updating session state.")
-        # Keep existing session state values
 else:
     # If component didn't send a new value (value is None or same as last sent),
     # we continue using the existing session state values.
     print("Component did not send a new state OR received state was invalid. Using existing session state.")
 
-
+# --- Now proceed with calculations using the finalized session state ---
 print(f"State for Calculations: Page={st.session_state.current_page}, Sort={st.session_state.sort_order}, Filters={json.dumps(st.session_state.filters)}")
 
-
-# 3. Apply filters and sorting using the *current* session state.
+# 4. Apply filters and sorting using the *current* session state.
 if 'base_lf' not in st.session_state:
      st.error("Base LazyFrame not found. Please reload.")
      st.stop()
@@ -2014,92 +2154,144 @@ filtered_lf = apply_filters_and_sort(
     st.session_state.sort_order
 )
 
-# 4. Calculate total rows for pagination.
+# 5. Calculate total rows for pagination.
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
+    # Use pl.len() for potentially faster count on LazyFrames
     total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
     st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
+    # --- Fallback if pl.len() causes issues ---
+    # total_rows_result = filtered_lf.select(pl.lit(1).alias("count")).collect()
+    # st.session_state.total_rows = total_rows_result.height
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
 except Exception as e:
     st.error(f"Error calculating total rows: {e}")
-    st.session_state.total_rows = 0
+    st.session_state.total_rows = 0 # Set to 0 on error
 
-# 5. Calculate pagination details and fetch the current page data.
+
+# 6. Calculate pagination details and fetch the current page data.
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
 # Clamp current page *after* total rows calculation
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
-df_page = pl.DataFrame()
+df_page = pl.DataFrame() # Initialize as empty DataFrame
+
+# Fetch data using slice().collect() - generally recommended for pagination
 if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        # Add check for specific state filter case
-        is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States']
-        if is_state_filter_active:
-             print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
-
         df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True)
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
-        if is_state_filter_active:
-             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF
+
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
+        df_page = pl.DataFrame() # Ensure empty on error
 else:
-     print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}")
+     print(f"Skipping page fetch. Conditions not met: Total Rows={st.session_state.total_rows}, Offset={offset}, Page Size={PAGE_SIZE}")
 
 
-# 6. Generate HTML for the fetched page.
+# 7. Generate HTML for the fetched page.
 print("Generating HTML for table...")
-header_html, rows_html = generate_table_html_for_page(df_page)
-if is_state_filter_active: # Log generated HTML specifically for state filter
-    print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
+header_html, rows_html = generate_table_html_for_page(df_page) # Handles empty df_page
 
 
-# 7. Prepare the data payload to send *to* the component for this render.
+# 8. Prepare the data payload to send *to* the component for this render.
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
-    "total_rows": st.session_state.total_rows,
-    "filters": st.session_state.filters, # Send the filters used for this render
-    "sort_order": st.session_state.sort_order, # Send the sort order used
+    "total_rows": st.session_state.total_rows, # Send the calculated total_rows
+    "filters": st.session_state.filters,
+    "sort_order": st.session_state.sort_order,
     "header_html": header_html,
     "rows_html": rows_html,
-    # Pass metadata needed for UI rendering
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
+    "rerender_trigger": time.time() # Keep for reset button fix
 }
 
-# Store the core state *before* sending it, for comparison on the next run
+# 9. Store the core state *being sent* this run, for comparison later and in the next run
 state_being_sent_to_component = {
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order,
 }
-# Use deep copy if filters dict might be mutated elsewhere, though unlikely here
-st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component)) # Use JSON roundtrip for safe deep copy
+# Use JSON roundtrip for safe deep copy
+st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component))
 print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
+print(f"DEBUG: Sending total_rows={st.session_state.total_rows} to component payload.")
 
 
-# 8. Render the component.
+# 10. Render the component.
 print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # Stable key
-    default=None # Explicitly set to None
+    default=None
 )
 
-# 9. Store the raw value returned by the component *now* into session state
-#    so it can be read at the START of the *next* script run.
-st.session_state.kickstarter_state_value = component_return_value
-print(f"End of Run: Stored component value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
+# 11. Compare received state with state just sent, and trigger immediate rerun if necessary
+print(f"End of Run: Received value from component: {json.dumps(component_return_value)}")
+# state_sent_this_run = st.session_state.get("state_sent_to_component") # Already have it in state_being_sent_to_component
+
+needs_rerun = False
+if component_return_value is not None:
+    # Basic validation of the received structure
+    if (isinstance(component_return_value, dict) and
+            "page" in component_return_value and
+            "sort_order" in component_return_value and
+            "filters" in component_return_value and
+            isinstance(component_return_value.get("filters"), dict)):
+
+        try:
+            received_state_str = json.dumps(component_return_value, sort_keys=True)
+            # Compare with the state Python just constructed and sent
+            sent_state_str = json.dumps(state_being_sent_to_component, sort_keys=True)
+
+            if received_state_str != sent_state_str:
+                print("Change detected: Component state differs from state JUST sent this run.")
+
+                # --- Update Session State Directly ---
+                # This ensures the *next* run (triggered by rerun) starts with the correct state
+                st.session_state.current_page = component_return_value["page"]
+                st.session_state.sort_order = component_return_value["sort_order"]
+
+                # Safely update filters (redundant validation logic removed for brevity, same as step 3)
+                # (Assuming validation in step 3 is sufficient for the rerun case)
+                # Re-add validation if strictness is needed here too
+                st.session_state.filters = component_return_value["filters"] # Trusting the structure based on initial check
+
+                print("Session state updated based on component return value FOR RERUN.")
+                # --- END Session State Update ---
+
+                needs_rerun = True
+            else:
+                print("No change detected: Component state matches state JUST sent this run.")
+        except Exception as e:
+            print(f"Error during state comparison or update for rerun: {e}")
+    else:
+        print("Warning: Invalid structure received from component at end of run. Skipping comparison/update.")
+else:
+    print("Component returned None at end of run. Skipping comparison.")
 
 
-# Optional: Debug footer
+# 12. Store the raw component value for the *next* script run's step 1
+st.session_state.kickstarter_state_value = component_return_value # Store it regardless
+
+
+# 13. Trigger rerun if needed
+if needs_rerun:
+    print(">>> Triggering st.rerun() <<<")
+    st.rerun()
+else:
+     print("Script run finished normally.")
+
+
+# Optional: Debug footer (might not display if rerun happens)
 # st.markdown("---")
 # st.caption(f"Debug Info: Page {st.session_state.current_page}, Date Filter: {st.session_state.filters.get('date', 'N/A')}, Sort: {st.session_state.sort_order}, Total Rows: {st.session_state.total_rows}")
