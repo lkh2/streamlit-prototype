@@ -1453,67 +1453,76 @@ class TableManager {
                     raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
                 }
             }
-            : this.currentFilters;
+            : JSON.parse(JSON.stringify(this.currentFilters)); 
 
         const defaultSort = 'popularity';
         const defaultPage = 1;
 
-        this.currentPage = defaultPage;
-        this.currentSort = defaultSort;
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
-        this.selectedCategories = new Set(defaultFilters.categories);
-        this.selectedSubcategories = new Set(defaultFilters.subcategories);
-        this.selectedCountries = new Set(defaultFilters.countries);
-        this.selectedStates = new Set(defaultFilters.states);
-
-        if (this.searchInput) this.searchInput.value = defaultFilters.search;
-        const sortSelect = document.getElementById('sortFilter');
-        if (sortSelect) sortSelect.value = defaultSort;
-        const dateSelect = document.getElementById('dateFilter');
-        if (dateSelect) dateSelect.value = defaultFilters.date;
-
-        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
-        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
-
-        this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
-        this.setupMultiSelect('country', document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn);
-        this.setupMultiSelect('state', document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn);
-
-        this.updateSubcategoryOptions(); 
-
-        if (defaultFilters.ranges && this.rangeSliderElements) {
-             const { ranges } = defaultFilters;
-             const { fromSlider, toSlider, fromInput, toInput,
-                     goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                     raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                     fillSlider } = this.rangeSliderElements;
-             if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
-                 fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
-                 fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
-                 fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-             }
-             if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
-                 goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
-                 goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
-                 fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-             }
-             if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
-                  raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
-                  raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
-                  fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
-             }
-        }
+        this.showLoading(true);
 
         const resetStatePayload = {
             page: defaultPage,
-            filters: defaultFilters,
+            filters: JSON.parse(JSON.stringify(defaultFilters)), 
             sort_order: defaultSort
         };
-        this.showLoading(true);
-        Streamlit.setComponentValue(resetStatePayload);
-    }
 
+        Streamlit.setComponentValue(resetStatePayload);
+
+        try {
+            this.currentPage = defaultPage;
+            this.currentSort = defaultSort;
+            this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
+            this.selectedCategories = new Set(defaultFilters.categories);
+            this.selectedSubcategories = new Set(defaultFilters.subcategories);
+            this.selectedCountries = new Set(defaultFilters.countries);
+            this.selectedStates = new Set(defaultFilters.states);
+
+            if (this.searchInput) this.searchInput.value = defaultFilters.search;
+            const sortSelect = document.getElementById('sortFilter');
+            if (sortSelect) sortSelect.value = defaultSort;
+            const dateSelect = document.getElementById('dateFilter');
+            if (dateSelect) dateSelect.value = defaultFilters.date;
+
+            this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+            this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
+            this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+            this.setupMultiSelect('category', document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, 'All Categories', this.categoryBtn);
+            this.updateSubcategoryOptions(); 
+            this.setupMultiSelect('country', document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, 'All Countries', this.countryBtn);
+            this.setupMultiSelect('state', document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, 'All States', this.stateBtn);
+
+            if (defaultFilters.ranges && this.rangeSliderElements) {
+                 const { ranges } = defaultFilters;
+                 const { fromSlider, toSlider, fromInput, toInput,
+                         goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+                         raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+                         fillSlider } = this.rangeSliderElements;
+
+                 if (ranges.pledged && fromSlider && toSlider && fromInput && toInput && fillSlider) {
+                     fromSlider.value = ranges.pledged.min; toSlider.value = ranges.pledged.max;
+                     fromInput.value = ranges.pledged.min; toInput.value = ranges.pledged.max;
+                     fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+                 }
+                 if (ranges.goal && goalFromSlider && goalToSlider && goalFromInput && goalToInput && fillSlider) {
+                     goalFromSlider.value = ranges.goal.min; goalToSlider.value = ranges.goal.max;
+                     goalFromInput.value = ranges.goal.min; goalToInput.value = ranges.goal.max;
+                     fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+                 }
+                 if (ranges.raised && raisedFromSlider && raisedToSlider && raisedFromInput && raisedToInput && fillSlider) {
+                      raisedFromSlider.value = ranges.raised.min; raisedToSlider.value = ranges.raised.max;
+                      raisedFromInput.value = ranges.raised.min; raisedToInput.value = ranges.raised.max;
+                      fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+                 }
+            }
+
+            this.updatePagination();
+            this.showLoading(false);
+        } catch (error) {
+             console.error("Error during optimistic UI reset in resetFilters:", error);
+             this.showLoading(false);
+        }
+    }
 
     adjustHeight() {
          requestAnimationFrame(() => {
@@ -1623,7 +1632,7 @@ class TableManager {
     updateSubcategoryOptions() {
         const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
         const subcategoryBtn = document.getElementById('subcategoryFilterBtn'); 
-        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories || !this.categorySubcategoryMap) {
+        if (!subcategoryOptionsContainer || !subcategoryBtn || !this.selectedSubcategories || !this.categorySubcategoryMap || !this.selectedCategories) {
             console.warn("Cannot update subcategory options - missing elements or data.");
             return;
         }
@@ -1633,12 +1642,12 @@ class TableManager {
 
         if (isAllCategoriesSelected || this.selectedCategories.size === 0) {
              (this.categorySubcategoryMap['All Categories'] || []).forEach(subcat => {
-                 if (subcat !== 'All Subcategories') availableSubcategories.add(subcat);
+                 availableSubcategories.add(subcat); 
             });
         } else {
             this.selectedCategories.forEach(cat => {
                 (this.categorySubcategoryMap[cat] || []).forEach(subcat => {
-                    if (subcat !== 'All Subcategories') availableSubcategories.add(subcat);
+                    availableSubcategories.add(subcat); 
                 });
             });
         }
@@ -1653,12 +1662,13 @@ class TableManager {
         });
 
         const hasSpecificSelection = Array.from(this.selectedSubcategories).some(s => s !== 'All Subcategories');
-        if ((changedSelection && !hasSpecificSelection) || this.selectedSubcategories.size === 0) {
-             this.selectedSubcategories.clear();
-             this.selectedSubcategories.add('All Subcategories');
-        }
         if (!hasSpecificSelection && !this.selectedSubcategories.has('All Subcategories')) {
+            this.selectedSubcategories.clear();
             this.selectedSubcategories.add('All Subcategories');
+            changedSelection = true;
+        } else if (this.selectedSubcategories.size === 0) {
+             this.selectedSubcategories.add('All Subcategories');
+             changedSelection = true;
         }
 
         const sortedSubcategories = Array.from(availableSubcategories);
@@ -1681,6 +1691,7 @@ class TableManager {
              'All Subcategories',
              subcategoryBtn 
          );
+         return changedSelection;
     }
 
     setupRangeSlider() {
@@ -2011,7 +2022,11 @@ if component_return_value is not None:
                 st.session_state.current_page = component_return_value["page"]
                 st.session_state.sort_order = component_return_value["sort_order"]
 
-                st.session_state.filters = component_return_value["filters"]
+                new_filters = component_return_value["filters"]
+                validated_filters = DEFAULT_FILTERS.copy()
+                if isinstance(new_filters, dict):
+                     validated_filters.update(new_filters)
+                st.session_state.filters = validated_filters
                 needs_rerun = True
         except Exception as e:
             print(f"Error during state comparison or update for rerun: {e}")
