@@ -1538,7 +1538,6 @@ class TableManager {
         const defaultPage = 1;
 
         // --- Create the state payload FIRST ---
-        // This represents the target state we want Python to use
          const resetStatePayload = {
              page: defaultPage,
              filters: JSON.parse(JSON.stringify(defaultFilters)), // Use deep copy
@@ -1546,23 +1545,7 @@ class TableManager {
          };
          console.log("Reset button clicked. Target state:", resetStatePayload);
 
-         // --- Check if already in default state (compare with current internal JS state) ---
-         const currentStatePayload = {
-             page: this.currentPage,
-             filters: this.currentFilters,
-             sort_order: this.currentSort
-         };
-
-         const isAlreadyDefault = JSON.stringify(resetStatePayload, Object.keys(resetStatePayload).sort()) === JSON.stringify(currentStatePayload, Object.keys(currentStatePayload).sort());
-
-         if (isAlreadyDefault) {
-             console.log("Already in default state. No update needed.");
-             // Optional: maybe briefly flash a confirmation? Or just do nothing.
-             return; // Exit the function if already reset
-         }
-
-
-        // --- If not default, proceed with reset ---
+         // --- Proceed with reset ---
         console.log("Resetting internal JS state and UI elements visually...");
 
         // Reset internal JS state
@@ -1575,6 +1558,7 @@ class TableManager {
         this.selectedStates = new Set(defaultFilters.states);
 
         // --- Explicit UI Update ---
+        // (Keep the UI update code as it was)
         if (this.searchInput) this.searchInput.value = defaultFilters.search;
         const sortSelect = document.getElementById('sortFilter');
         if (sortSelect) sortSelect.value = defaultSort;
@@ -1619,6 +1603,7 @@ class TableManager {
              }
         }
         console.log("UI elements visually reset.");
+        // --- END UI Update code ---
 
         // Show loading indicator
         this.showLoading(true);
@@ -2049,20 +2034,18 @@ print(f"Start of Run: Received component value from previous run: {json.dumps(co
 # 2. Update Streamlit session state *if* a valid state was received from the component
 if component_state_from_last_run is not None:
     print("Component sent state. Attempting to update session state.")
-    # --- ADDED: Compare with current state ---
-    try:
-        # Use the state *sent* to the component last time for a more accurate comparison
-        state_sent_last_time = st.session_state.get("state_sent_to_component", DEFAULT_COMPONENT_STATE)
-        print(f"Comparing received state: {json.dumps(component_state_from_last_run, sort_keys=True)}")
-        print(f"With state sent last run: {json.dumps(state_sent_last_time, sort_keys=True)}")
-        # Simple equality check for debugging (might need deep compare later)
-        if json.dumps(component_state_from_last_run, sort_keys=True) == json.dumps(state_sent_last_time, sort_keys=True):
-             print("Received state is identical to the state sent last run.")
-        else:
-             print("Received state differs from state sent last run. Updating session state.")
-    except Exception as e:
-        print(f"Error comparing states: {e}")
-    # --- END ADDED SECTION ---
+    # --- REMOVED: State comparison logic ---
+    # try:
+    #     state_sent_last_time = st.session_state.get("state_sent_to_component", DEFAULT_COMPONENT_STATE)
+    #     print(f"Comparing received state: {json.dumps(component_state_from_last_run, sort_keys=True)}")
+    #     print(f"With state sent last run: {json.dumps(state_sent_last_time, sort_keys=True)}")
+    #     if json.dumps(component_state_from_last_run, sort_keys=True) == json.dumps(state_sent_last_time, sort_keys=True):
+    #          print("Received state is identical to the state sent last run.")
+    #     else:
+    #          print("Received state differs from state sent last run. Updating session state.")
+    # except Exception as e:
+    #     print(f"Error comparing states: {e}")
+    # --- END REMOVED SECTION ---
 
     # Validate the received structure before updating
     if (isinstance(component_state_from_last_run, dict) and
@@ -2075,26 +2058,35 @@ if component_state_from_last_run is not None:
             isinstance(component_state_from_last_run["filters"].get("ranges"), dict)
         ):
 
-        # --- Only update if received state is different from what we last sent ---
-        # This might help prevent unnecessary updates/loops if the component sends back the same state
-        if json.dumps(component_state_from_last_run, sort_keys=True) != json.dumps(st.session_state.get("state_sent_to_component", DEFAULT_COMPONENT_STATE), sort_keys=True):
-            st.session_state.current_page = component_state_from_last_run["page"]
-            st.session_state.sort_order = component_state_from_last_run["sort_order"]
+        # --- REMOVED: Conditional update based on comparison ---
+        # Always update session state if a valid structure is received
+        st.session_state.current_page = component_state_from_last_run["page"]
+        st.session_state.sort_order = component_state_from_last_run["sort_order"]
 
-            new_filters = component_state_from_last_run["filters"]
-            # Ensure all default keys exist in the new filter state
-            for key, default_value in DEFAULT_FILTERS.items():
-                 if key not in new_filters:
-                     print(f"Warning: Key '{key}' missing in received filters. Using default.")
-                     new_filters[key] = default_value
-                 if key == 'ranges' and not isinstance(new_filters[key], dict):
-                      print(f"Warning: 'ranges' key is not a dict. Resetting.")
-                      new_filters[key] = DEFAULT_FILTERS['ranges']
+        new_filters = component_state_from_last_run["filters"]
+        # Ensure all default keys exist in the new filter state
+        for key, default_value in DEFAULT_FILTERS.items():
+             if key not in new_filters:
+                 print(f"Warning: Key '{key}' missing in received filters. Using default.")
+                 new_filters[key] = default_value
+             if key == 'ranges' and not isinstance(new_filters.get(key), dict): # Use .get for safety
+                  print(f"Warning: '{key}' key is not a dict or missing. Resetting.")
+                  new_filters[key] = DEFAULT_FILTERS[key]
+             # Deeper check for ranges structure
+             elif key == 'ranges':
+                  for r_key, r_default in DEFAULT_FILTERS['ranges'].items():
+                      if r_key not in new_filters['ranges'] or not isinstance(new_filters['ranges'].get(r_key), dict):
+                          print(f"Warning: Structure missing/invalid for range '{r_key}'. Resetting range.")
+                          new_filters['ranges'][r_key] = r_default
+                      elif not all(k in new_filters['ranges'][r_key] for k in ['min', 'max']):
+                           print(f"Warning: Min/Max missing for range '{r_key}'. Resetting range.")
+                           new_filters['ranges'][r_key] = r_default
 
-            st.session_state.filters = new_filters
-            print("Session state updated successfully from component state.")
-        else:
-             print("Received state is identical to state sent last time. Skipping session state update.")
+
+        st.session_state.filters = new_filters
+        print("Session state updated successfully from component state.")
+        # else:
+        #      print("Received state is identical to state sent last time. Skipping session state update.")
 
     else:
         print(f"Warning: Invalid or incomplete structure in received component state: {component_state_from_last_run}. NOT updating session state.")
