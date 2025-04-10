@@ -601,15 +601,41 @@ css = """
     .hidden-cell {
         display: none;
     }
+    
+    .filter-flex-wrapper {
+        width: 100%;
+        justify-content: center;
+        display: flex;
+    }
 
     .filter-wrapper {
-        width: 100%;
+        max-width: 100%;
+        width: fit-content;
         background: transparent;
         border-radius: 20px;
         margin-bottom: 20px;
         min-height: 120px;
-        display: flex;
+        display: flex;    
         flex-direction: row;
+        justify-content: space-around;
+        overflow-x: auto;
+    }
+    
+    .filter-wrapper::-webkit-scrollbar-track {
+        -webkit-box-shadow: inset 0 0 6px rgba(0,0,0,0.05);
+        border-radius: 10px;
+        background-color: white;
+    }
+
+    .filter-wrapper::-webkit-scrollbar {
+        width: 8px;
+        background-color: transparent;
+    }
+
+    .filter-wrapper::-webkit-scrollbar-thumb {
+        border-radius: 10px;
+        -webkit-box-shadow: inset 0 0 6px rgba(0,0,0,0.05);
+        background-color: lightgrey;
     }
 
     .reset-wrapper {
@@ -1012,121 +1038,123 @@ class TableManager {
             <div class="title-wrapper">
                 <span>Explore Successful Projects</span>
             </div>
-            <div class="filter-wrapper">
-                 <div class="reset-wrapper">
-                     <button class="reset-button" id="resetFilters">
-                         <span>Default</span>
-                     </button>
-                 </div>
-                 <div class="filter-controls">
-                     <div class="filter-row">
-                         <span class="filter-label">Explore</span>
-                         <div class="multi-select-dropdown">
-                             <button id="categoryFilterBtn" class="filter-select multi-select-btn">Categories</button>
-                             <div class="multi-select-content" id="categoryOptionsContainer">
-                                 ${(this.filterOptions.categories || []).map(opt => `<div class="category-option" data-value="${opt}">${opt}</div>`).join('')}
-                             </div>
-                         </div>
-                         <span class="filter-label">&</span>
-                         <div class="multi-select-dropdown">
-                             <button id="subcategoryFilterBtn" class="filter-select multi-select-btn">Subcategories</button>
-                             <div class="multi-select-content" id="subcategoryOptionsContainer">
-                                 <!-- Populated dynamically -->
-                             </div>
-                         </div>
-                         <span class="filter-label">Projects On</span>
-                         <div class="multi-select-dropdown">
-                             <button id="countryFilterBtn" class="filter-select multi-select-btn">Countries</button>
-                             <div class="multi-select-content" id="countryOptionsContainer">
-                                ${ (this.filterOptions.countries || []).map(opt => `<div class="country-option" data-value="${opt}">${opt}</div>`).join('')}
-                             </div>
-                         </div>
-                         <span class="filter-label">Sorted By</span>
-                         <select id="sortFilter" class="filter-select">
-                             <option value="popularity">Most Popular</option>
-                             <option value="newest">Newest First</option>
-                             <option value="oldest">Oldest First</option>
-                             <option value="mostfunded">Most Funded</option>
-                             <option value="mostbacked">Most Backed</option>
-                             <option value="enddate">End Date</option>
-                         </select>
-                     </div>
-                     <div class="filter-row">
-                        <span class="filter-label">More Flexible, Dynamic Search:</span>
-                        <div class="multi-select-dropdown">
-                            <button id="stateFilterBtn" class="filter-select multi-select-btn">States</button>
-                            <div class="multi-select-content" id="stateOptionsContainer">
-                                ${ (this.filterOptions.states || []).map(opt => `<div class="state-option" data-value="${opt}">${opt}</div>`).join('')}
+            <div class="filter-flex-wrapper">
+                <div class="filter-wrapper">
+                    <div class="reset-wrapper">
+                        <button class="reset-button" id="resetFilters">
+                            <span>Default</span>
+                        </button>
+                    </div>
+                    <div class="filter-controls">
+                        <div class="filter-row">
+                            <span class="filter-label">Explore</span>
+                            <div class="multi-select-dropdown">
+                                <button id="categoryFilterBtn" class="filter-select multi-select-btn">Categories</button>
+                                <div class="multi-select-content" id="categoryOptionsContainer">
+                                    ${(this.filterOptions.categories || []).map(opt => `<div class="category-option" data-value="${opt}">${opt}</div>`).join('')}
+                                </div>
                             </div>
-                        </div>
-                        <div class="range-dropdown">
-                            <button class="filter-select">Pledged Amount Range</button>
-                             <div class="range-content">
-                                <div class="range-container">
-                                    <div class="sliders-control">
-                                        <input id="fromSlider" type="range" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
-                                        <input id="toSlider" type="range" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
-                                    </div>
-                                    <div class="form-control">
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Min $</span>
-                                            <input class="form-control-input" type="number" id="fromInput" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
-                                        </div>
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Max $</span>
-                                            <input class="form-control-input" type="number" id="toInput" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
-                                        </div>
-                                    </div>
+                            <span class="filter-label">&</span>
+                            <div class="multi-select-dropdown">
+                                <button id="subcategoryFilterBtn" class="filter-select multi-select-btn">Subcategories</button>
+                                <div class="multi-select-content" id="subcategoryOptionsContainer">
+                                    <!-- Populated dynamically -->
                                 </div>
-                             </div>
-                        </div>
-                        <div class="range-dropdown">
-                            <button class="filter-select">Goal Amount Range</button>
-                             <div class="range-content">
-                                <div class="range-container">
-                                    <div class="sliders-control">
-                                        <input id="goalFromSlider" type="range" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
-                                        <input id="goalToSlider" type="range" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
-                                    </div>
-                                    <div class="form-control">
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Min $</span>
-                                            <input class="form-control-input" type="number" id="goalFromInput" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
-                                        </div>
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Max $</span>
-                                            <input class="form-control-input" type="number" id="goalToInput" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
-                                        </div>
-                                    </div>
+                            </div>
+                            <span class="filter-label">Projects On</span>
+                            <div class="multi-select-dropdown">
+                                <button id="countryFilterBtn" class="filter-select multi-select-btn">Countries</button>
+                                <div class="multi-select-content" id="countryOptionsContainer">
+                                    ${ (this.filterOptions.countries || []).map(opt => `<div class="country-option" data-value="${opt}">${opt}</div>`).join('')}
                                 </div>
-                             </div>
+                            </div>
+                            <span class="filter-label">Sorted By</span>
+                            <select id="sortFilter" class="filter-select">
+                                <option value="popularity">Most Popular</option>
+                                <option value="newest">Newest First</option>
+                                <option value="oldest">Oldest First</option>
+                                <option value="mostfunded">Most Funded</option>
+                                <option value="mostbacked">Most Backed</option>
+                                <option value="enddate">End Date</option>
+                            </select>
                         </div>
-                        <div class="range-dropdown">
-                            <button class="filter-select">Percentage Raised Range</button>
-                            <div class="range-content">
-                                <div class="range-container">
-                                    <div class="sliders-control">
-                                        <input id="raisedFromSlider" type="range" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
-                                        <input id="raisedToSlider" type="range" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
-                                    </div>
-                                    <div class="form-control">
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Min %</span>
-                                            <input class="form-control-input" type="number" id="raisedFromInput" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
+                        <div class="filter-row">
+                            <span class="filter-label">More Flexible, Dynamic Search:</span>
+                            <div class="multi-select-dropdown">
+                                <button id="stateFilterBtn" class="filter-select multi-select-btn">States</button>
+                                <div class="multi-select-content" id="stateOptionsContainer">
+                                    ${ (this.filterOptions.states || []).map(opt => `<div class="state-option" data-value="${opt}">${opt}</div>`).join('')}
+                                </div>
+                            </div>
+                            <div class="range-dropdown">
+                                <button class="filter-select">Pledged Amount Range</button>
+                                <div class="range-content">
+                                    <div class="range-container">
+                                        <div class="sliders-control">
+                                            <input id="fromSlider" type="range" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                            <input id="toSlider" type="range" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
                                         </div>
-                                        <div class="form-control-container">
-                                            <span class="form-control-label">Max %</span>
-                                            <input class="form-control-input" type="number" id="raisedToInput" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                        <div class="form-control">
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Min $</span>
+                                                <input class="form-control-input" type="number" id="fromInput" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                            </div>
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Max $</span>
+                                                <input class="form-control-input" type="number" id="toInput" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
                             </div>
+                            <div class="range-dropdown">
+                                <button class="filter-select">Goal Amount Range</button>
+                                <div class="range-content">
+                                    <div class="range-container">
+                                        <div class="sliders-control">
+                                            <input id="goalFromSlider" type="range" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                            <input id="goalToSlider" type="range" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                        </div>
+                                        <div class="form-control">
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Min $</span>
+                                                <input class="form-control-input" type="number" id="goalFromInput" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                            </div>
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Max $</span>
+                                                <input class="form-control-input" type="number" id="goalToInput" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="range-dropdown">
+                                <button class="filter-select">Percentage Raised Range</button>
+                                <div class="range-content">
+                                    <div class="range-container">
+                                        <div class="sliders-control">
+                                            <input id="raisedFromSlider" type="range" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                            <input id="raisedToSlider" type="range" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                        </div>
+                                        <div class="form-control">
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Min %</span>
+                                                <input class="form-control-input" type="number" id="raisedFromInput" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                            </div>
+                                            <div class="form-control-container">
+                                                <span class="form-control-label">Max %</span>
+                                                <input class="form-control-input" type="number" id="raisedToInput" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <select id="dateFilter" class="filter-select">
+                                ${(this.filterOptions.date_ranges || []).map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                            </select>
                         </div>
-                        <select id="dateFilter" class="filter-select">
-                            ${(this.filterOptions.date_ranges || []).map(opt => `<option value="${opt}">${opt}</option>`).join('')}
-                        </select>
-                     </div>
-                 </div>
+                    </div>
+                </div>
             </div>
             <div class="table-wrapper">
                 <div class="table-controls">
