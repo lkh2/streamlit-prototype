@@ -618,7 +618,8 @@ css = """
         display: flex;    
         flex-direction: row;
         justify-content: space-around;
-        overflow: visible;
+        overflow-x: auto;
+        overflow-y: hidden;
     }
     
     .filter-wrapper::-webkit-scrollbar-track {
@@ -628,7 +629,7 @@ css = """
     }
 
     .filter-wrapper::-webkit-scrollbar {
-        width: 8px;
+        height: 8px;
         background-color: transparent;
     }
 
