@@ -2048,8 +2048,13 @@ try:
     count_duration = time.time() - start_count_time
     print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
 except Exception as e:
-    st.error(f"Error calculating total rows: {e}")
-    st.session_state.total_rows = 0
+    # Check if it's the specific panic exception, provide more context
+    if "PanicException" in str(e):
+         st.error(f"Polars Panic during row count calculation: {e}. This might indicate data corruption or a Polars bug.")
+    else:
+         st.error(f"Error calculating total rows: {e}")
+    st.session_state.total_rows = 0 # Set to 0 on error
+
 
 # 5. Calculate pagination details and fetch the current page data.
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
@@ -2063,29 +2068,43 @@ is_state_filter_active = ('states' in st.session_state.filters and
                            st.session_state.filters['states'] != ['All States'])
 
 df_page = pl.DataFrame() # Initialize as empty DataFrame
-if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
+
+# --- MODIFIED APPROACH: Collect filtered frame first, then slice ---
+if st.session_state.total_rows > 0: # Only attempt collect/slice if rows are expected
     try:
-        print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
-        start_fetch_time = time.time()
+        print("Collecting entire filtered/sorted DataFrame...")
+        start_collect_time = time.time()
+        # Collect the whole filtered/sorted frame (potentially memory intensive)
+        # Keep streaming for the full collect if possible, remove if it also panics
+        df_filtered_collected = filtered_lf.collect(engine="streaming")
+        collect_duration = time.time() - start_collect_time
+        print(f"Collected {len(df_filtered_collected)} rows (took {collect_duration:.2f}s)")
 
-        if is_state_filter_active:
-             print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
-
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming")
-        fetch_duration = time.time() - start_fetch_time
-        print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
-
-        # --- Move debug logging inside the try block and check df_page ---
-        if is_state_filter_active and not df_page.is_empty():
-             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF only if df_page is not empty
-        elif is_state_filter_active and df_page.is_empty():
-             print(f"DEBUG: State filter active, but no rows returned for this page.")
+        # Now slice the collected DataFrame
+        # Ensure offset is still valid relative to collected rows (should be if total_rows was accurate)
+        if offset < len(df_filtered_collected):
+             print(f"Slicing collected DataFrame for page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
+             df_page = df_filtered_collected.slice(offset, PAGE_SIZE)
+             print(f"Page data sliced: {len(df_page)} rows")
+             if is_state_filter_active and not df_page.is_empty():
+                 print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF only if df_page is not empty
+             elif is_state_filter_active and df_page.is_empty():
+                  print(f"DEBUG: State filter active, but no rows returned for this page after slicing collected frame.")
+        else:
+             print(f"Warning: Offset {offset} is out of bounds for collected rows {len(df_filtered_collected)}. Returning empty page.")
+             # df_page remains empty
 
     except Exception as e:
-        st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
+        # Check if it's the specific panic exception
+        if "PanicException" in str(e):
+             st.error(f"Polars PanicException during filtered data collection: {e}. This might indicate data corruption or a Polars bug. Try simplifying filters or checking the Parquet file.")
+             # Also try removing engine="streaming" from the collect above if this persists.
+        else:
+             st.error(f"Error collecting or slicing filtered data: {e}")
         df_page = pl.DataFrame() # Ensure df_page is empty on error
+
 else:
-     print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}")
+     print(f"Skipping data fetch and slice because total rows is 0.")
      # df_page remains the empty DataFrame initialized earlier
 
 
