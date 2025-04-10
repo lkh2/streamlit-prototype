@@ -1909,8 +1909,7 @@ if st.session_state.total_rows > 0 and offset < st.session_state.total_rows : # 
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        # Use streamable=True instead of streaming=True
-        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streamable=True)
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(engine="streaming")
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
     except Exception as e:
