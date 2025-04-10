@@ -2207,6 +2207,8 @@ component_data_payload = {
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
+    # --- Ensure this trigger is present ---
+    "rerender_trigger": time.time()
 }
 
 # Store the core state *before* sending it, for comparison on the next run
@@ -2218,6 +2220,8 @@ state_being_sent_to_component = {
 # Use deep copy for safety
 st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component))
 print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
+# --- Add print statement here ---
+print(f"DEBUG: Sending total_rows={st.session_state.total_rows} to component payload.")
 
 
 # 8. Render the component.
