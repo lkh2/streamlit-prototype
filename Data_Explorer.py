@@ -1294,16 +1294,44 @@ class TableManager {
          if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
         // -- Update Multi-Selects --
+        // Update the internal sets first
         this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
         this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
         this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
         this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
+        // Update the visual UI (selected classes and button text)
         this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
-        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories
-        this.updateMultiSelectUI(document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'), this.selectedSubcategories, this.subcategoryBtn, 'All Subcategories');
+        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories AND re-binds their listeners via setupMultiSelect inside it
         this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
         this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+        // --- ADDED: Re-bind listeners for Category, Country, State ---
+        // This ensures listeners are active even if updateUIState subtly changed the DOM or state management requires re-binding.
+        // Subcategories are handled within updateSubcategoryOptions.
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'),
+            this.selectedCategories,
+            'All Categories',
+            this.categoryBtn,
+            true // Keep triggerSubcategoryUpdate = true for categories
+        );
+        this.setupMultiSelect(
+            document.querySelectorAll('#countryOptionsContainer .country-option'),
+            this.selectedCountries,
+            'All Countries',
+            this.countryBtn
+            // No trigger needed
+        );
+         this.setupMultiSelect(
+             document.querySelectorAll('#stateOptionsContainer .state-option'),
+             this.selectedStates,
+             'All States',
+             this.stateBtn
+             // No trigger needed
+         );
+        // --- END ADDED SECTION ---
+
 
         // -- Update Range Sliders --
         if (this.currentFilters.ranges && this.rangeSliderElements) {
