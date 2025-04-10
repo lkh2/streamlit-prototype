@@ -209,33 +209,36 @@ if 'base_lf' not in st.session_state:
         print(f"Scanning Parquet source: {parquet_source_path}")
         base_lf = pl.scan_parquet(parquet_source_path)
 
-        # Pre-process state column for styling (do this once on the base frame)
-        if 'State' in base_lf.columns:
-             base_lf = base_lf.with_columns(
-                 (
-                     pl.lit('<div class="state_cell state-')
-                     + pl.col('State').str.to_lowercase().fill_null('unknown')
-                     + pl.lit('">')
-                     + pl.col('State').str.to_lowercase().fill_null('unknown') # Keep original case for display if needed, or use capitalized later
-                     + pl.lit('</div>')
-                 ).alias('Styled State') # Use a different name to avoid conflict if 'State' is needed raw
-             ).rename({'Styled State': 'State'}) # Rename back if needed, or adjust column usage later
-
-        print("Base LazyFrame created and processed.")
+        print("Base LazyFrame created.")
         st.session_state.base_lf = base_lf
         # Initial schema check
-        if st.session_state.base_lf.head(0).collect().width == 0:
+        schema = st.session_state.base_lf.collect_schema()
+        print("Schema:", schema)
+        if len(schema) == 0: # Check if schema has columns
              st.error(f"Loaded data from '{parquet_source_path}' has no columns.")
              st.stop()
+        # Check for duplicate column names explicitly
+        if len(schema.names()) != len(set(schema.names())):
+             st.error(f"Parquet source '{parquet_source_path}' contains duplicate column names. Please clean the source data.")
+             # You might want to print the duplicate names here for debugging
+             from collections import Counter
+             counts = Counter(schema.names())
+             duplicates = [name for name, count in counts.items() if count > 1]
+             st.error(f"Duplicate columns found: {duplicates}")
+             st.stop()
+
 
     except Exception as e:
         st.error(f"Error scanning Parquet or initial processing: {e}")
+        # Provide more context if available
+        if hasattr(e, 'context'):
+            st.error(f"Context: {e.context()}")
         st.stop()
 
 # --- Filtering and Sorting Logic ---
 def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> pl.LazyFrame:
     """Applies filters and sorting to a LazyFrame."""
-    
+
     # 1. Text Search (Apply across relevant text columns)
     search_term = filters.get('search', '')
     if search_term:
@@ -247,7 +250,8 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
             search_expr = None
             for col in valid_search_cols:
                  # Case-insensitive contains
-                 current_expr = pl.col(col).str.contains(f"(?i){search_term}") 
+                 # Ensure the column is Utf8 before applying string operations
+                 current_expr = pl.col(col).cast(pl.Utf8).str.contains(f"(?i){search_term}")
                  if search_expr is None:
                      search_expr = current_expr
                  else:
@@ -263,23 +267,11 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         lf = lf.filter(pl.col('Subcategory').is_in(filters['subcategories']))
     if 'Country' in lf.columns and filters['countries'] != ['All Countries']:
         lf = lf.filter(pl.col('Country').is_in(filters['countries']))
-        
-    # State filter needs the original state name if filtering before styling
-    # If filtering *after* styling, you'd parse the HTML, which is inefficient.
-    # Let's assume 'Raw State' exists or filter before styling.
-    # *Correction*: Since we styled 'State' earlier, we need to filter based on the original state value.
-    # Let's assume a 'Raw State' column exists from processing, or modify the styling step.
-    # For now, let's skip state filtering on the server-side if 'Raw State' isn't available.
-    # *Alternative*: If 'State' contains the styled HTML, we can't filter easily server-side.
-    # Let's revert the State styling for now and apply it only during HTML generation for the collected page.
-    
-    # Revert State Styling from base_lf if applied
-    if 'State' in st.session_state.base_lf.columns and isinstance(st.session_state.base_lf.schema['State'], pl.datatypes.Utf8) and '<div' in st.session_state.base_lf.select('State').head(1).collect().item():
-         print("Warning: State column was pre-styled. Reverting for filtering. Consider styling only in generate_table_html.")
-         # This is tricky - we need the original state. Assume 'Raw State' exists or skip.
-         if 'Raw State' in lf.columns and filters['states'] != ['All States']:
-              lf = lf.filter(pl.col('Raw State').str.to_lowercase().is_in([s.lower() for s in filters['states']]))
-         # else: st.warning("Cannot filter by State server-side as 'State' column is pre-styled HTML and 'Raw State' is missing.")
+
+    # State Filter - Now operates on the raw 'State' column
+    if 'State' in lf.columns and filters['states'] != ['All States']:
+        # Filter using the raw state values, case-insensitively
+        lf = lf.filter(pl.col('State').cast(pl.Utf8).str.to_lowercase().is_in([s.lower() for s in filters['states']]))
 
     # 3. Range Filters
     ranges = filters.get('ranges', {})
@@ -314,9 +306,10 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
             compare_date = now - datetime.timedelta(days=10*365)
 
         if compare_date:
-             # Ensure Raw Date is datetime type
-             lf = lf.with_columns(pl.col("Raw Date").cast(pl.Datetime).alias("Raw Date"))
-             lf = lf.filter(pl.col('Raw Date') >= compare_date)
+             # Ensure Raw Date is datetime type before comparison
+             # Use try_cast for robustness if dates might be invalid
+             lf = lf.with_columns(pl.col("Raw Date").cast(pl.Datetime, strict=False).alias("Raw Date_dt"))
+             lf = lf.filter(pl.col('Raw Date_dt') >= compare_date).drop("Raw Date_dt")
 
 
     # 5. Sorting
@@ -337,7 +330,7 @@ def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> 
         sort_descending = True
     elif sort_order == 'enddate':
         sort_col = 'Raw Deadline'
-        sort_descending = True # Show soonest ending? Or latest ending? Assuming latest.
+        sort_descending = True # Assuming latest ending first
 
     if sort_col in lf.columns:
         lf = lf.sort(sort_col, descending=sort_descending, nulls_last=True)
@@ -356,15 +349,17 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
         'Category', 'Subcategory', 'Raw Pledged', 'Raw Goal', 'Raw Raised',
         'Raw Date', 'Raw Deadline', 'Backer Count', 'Popularity Score'
     ]
-    # Also need the visible columns
-    all_needed_cols = list(set(visible_columns + required_data_cols + ['State'])) # Add state explicitly
+    # Also need the visible columns and the raw 'State' column for styling
+    all_needed_cols = list(set(visible_columns + required_data_cols + ['State']))
 
     missing_cols = [col for col in all_needed_cols if col not in df_page.columns]
     if missing_cols:
         st.error(f"FATAL: Missing required columns in fetched data page: {missing_cols}. Check base Parquet schema and processing.")
         # Return empty if critical columns are missing
-        return (''.join(f'<th scope="col">{column}</th>' for column in visible_columns),
-                '<tr><td colspan="{}">Error: Missing critical data columns.</td></tr>'.format(len(visible_columns)))
+        # Ensure visible_columns only contains existing columns before generating header
+        visible_columns = [col for col in visible_columns if col in df_page.columns]
+        header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
+        return header_html, f'<tr><td colspan="{len(visible_columns) if visible_columns else 1}">Error: Missing critical data columns: {missing_cols}.</td></tr>'
 
 
     header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
@@ -380,45 +375,56 @@ def generate_table_html_for_page(df_page: pl.DataFrame):
         return header_html, f'<tr><td colspan="{len(visible_columns)}">Error rendering rows.</td></tr>'
 
     for row in data_dicts:
-        # Apply State styling here
-        state_value = row.get('State', 'unknown') # Get original state value
-        state_class = str(state_value).lower().replace(' ', '-') if state_value else 'unknown'
-        styled_state_html = f'<div class="state_cell state-{state_class}">{state_value}</div>' if state_value else 'N/A'
+        # Apply State styling here using the raw 'State' value
+        state_value = row.get('State') # Get original state value (might be None)
+        state_value_str = str(state_value) if state_value is not None else 'unknown'
+        # Create a CSS-friendly class name (lowercase, replace space with hyphen)
+        state_class = state_value_str.lower().replace(' ', '-') if state_value_str != 'unknown' else 'unknown'
+        # Ensure html escaping for the displayed text inside the div
+        styled_state_html = f'<div class="state_cell state-{html.escape(state_class)}">{html.escape(state_value_str)}</div>' if state_value is not None else '<div class="state_cell state-unknown">unknown</div>'
 
 
         # Data attributes for potential client-side use (though filtering is server-side)
+        # Ensure dates are formatted correctly if not None
+        raw_date_str = row.get('Raw Date').strftime('%Y-%m-%d') if row.get('Raw Date') else 'N/A'
+        raw_deadline_str = row.get('Raw Deadline').strftime('%Y-%m-%d') if row.get('Raw Deadline') else 'N/A'
         data_attrs = f'''
-            data-category="{row.get('Category', 'N/A')}"
-            data-subcategory="{row.get('Subcategory', 'N/A')}"
+            data-category="{html.escape(str(row.get('Category', 'N/A')))}"
+            data-subcategory="{html.escape(str(row.get('Subcategory', 'N/A')))}"
             data-pledged="{row.get('Raw Pledged', 0.0):.2f}"
             data-goal="{row.get('Raw Goal', 0.0):.2f}"
             data-raised="{row.get('Raw Raised', 0.0):.2f}"
-            data-date="{row.get('Raw Date').strftime('%Y-%m-%d') if row.get('Raw Date') else 'N/A'}"
-            data-deadline="{row.get('Raw Deadline').strftime('%Y-%m-%d') if row.get('Raw Deadline') else 'N/A'}"
+            data-date="{raw_date_str}"
+            data-deadline="{raw_deadline_str}"
             data-backers="{row.get('Backer Count', 0)}"
             data-popularity="{row.get('Popularity Score', 0.0):.6f}"
         '''
         visible_cells = ''
         for col in visible_columns:
-            value = row.get(col, 'N/A')
+            value = row.get(col) # Get value, might be None
+
             if col == 'Link':
                 url = str(value) if value else '#'
                 display_url = url if len(url) < 60 else url[:57] + '...'
+                # Escape URL components for safety
                 visible_cells += f'<td><a href="{html.escape(url)}" target="_blank" title="{html.escape(url)}">{html.escape(display_url)}</a></td>'
             elif col == 'Pledged Amount':
                  raw_pledged_val = row.get('Raw Pledged')
                  formatted_value = 'N/A'
                  if raw_pledged_val is not None:
                      try:
+                         # Ensure it's treated as float first for consistency
                          amount = int(float(raw_pledged_val))
                          formatted_value = f"${amount:,}"
                      except (ValueError, TypeError):
-                         pass # Keep N/A
+                         pass # Keep N/A if conversion fails
                  visible_cells += f'<td>{html.escape(formatted_value)}</td>'
             elif col == 'State':
-                 visible_cells += f'<td>{styled_state_html}</td>'
+                 visible_cells += f'<td>{styled_state_html}</td>' # Use the styled HTML generated above
             else:
-                visible_cells += f'<td>{html.escape(str(value))}</td>'
+                # Handle potential None values before converting to string and escaping
+                display_value = str(value) if value is not None else 'N/A'
+                visible_cells += f'<td>{html.escape(display_value)}</td>'
 
         rows_html += f'<tr class="table-row" {data_attrs}>{visible_cells}</tr>'
 
