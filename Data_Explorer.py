@@ -1062,11 +1062,7 @@ class TableManager {
                 <span>Explore Successful Projects</span>
             </div>
             <div class="filter-wrapper">
-                 <div class="reset-wrapper">
-                     <button class="reset-button" id="resetFilters">
-                         <span>Default</span>
-                     </button>
-                 </div>
+                 <!-- Reset Button Wrapper Removed -->
                  <div class="filter-controls">
                      <div class="filter-row">
                          <span class="filter-label">Explore</span>
@@ -1215,9 +1211,6 @@ class TableManager {
         document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
         document.getElementById('next-page').addEventListener('click', () => this.nextPage());
         // Page number clicks are handled dynamically in updatePagination
-
-        // --- Reset ---
-        document.getElementById('resetFilters').addEventListener('click', () => this.resetFilters());
 
         // --- Sort ---
         document.getElementById('sortFilter').addEventListener('change', (e) => {
@@ -1477,56 +1470,6 @@ class TableManager {
             this.requestUpdate();
         }
     }
-
-    resetFilters() {
-        // Get default values directly from the component state defaults
-        const defaultFilters = window.tableManagerInstance?.minMaxValues // Use initial metadata if available
-            ? {
-                search: '',
-                categories: ['All Categories'],
-                subcategories: ['All Subcategories'],
-                countries: ['All Countries'],
-                states: ['All States'],
-                date: 'All Time',
-                ranges: {
-                    pledged: { min: this.minMaxValues.pledged.min, max: this.minMaxValues.pledged.max },
-                    goal: { min: this.minMaxValues.goal.min, max: this.minMaxValues.goal.max },
-                    raised: { min: this.minMaxValues.raised.min, max: this.minMaxValues.raised.max }
-                }
-            }
-            : this.currentFilters; // Fallback just in case
-
-        const defaultSort = 'popularity';
-        const defaultPage = 1;
-
-        // Reset internal JS state FIRST
-        this.currentPage = defaultPage;
-        this.currentSort = defaultSort;
-        // Use a deep copy to avoid accidental mutation later
-        this.currentFilters = JSON.parse(JSON.stringify(defaultFilters));
-        this.selectedCategories = new Set(defaultFilters.categories);
-        this.selectedSubcategories = new Set(defaultFilters.subcategories);
-        this.selectedCountries = new Set(defaultFilters.countries);
-        this.selectedStates = new Set(defaultFilters.states);
-
-        // Show loading indicator immediately
-        this.showLoading(true);
-
-        // Construct the state object to send to Python, using the internally reset values
-        const resetStatePayload = {
-            page: this.currentPage,
-            filters: this.currentFilters,
-            sort_order: this.currentSort
-        };
-        console.log("Resetting state. Sending payload to Python:", resetStatePayload);
-        Streamlit.setComponentValue(resetStatePayload);
-
-        // --- REMOVED --- Explicit UI element updates are removed from here.
-        // The UI will be updated visually when Python sends back the
-        // reset data via the onRender -> updateUIState flow.
-        // --- REMOVED --- this.requestUpdate();
-    }
-
 
     adjustHeight() {
          // Use requestAnimationFrame for smoother adjustments
@@ -1939,80 +1882,89 @@ Streamlit.setComponentReady();
 table_component = generate_component('kickstarter_table', template=css, script=script)
 
 
+# --- Reset Button Callback Function ---
+def reset_app_state():
+    """Resets session state variables to their default values."""
+    print("--- Reset Button Clicked: Resetting Session State ---")
+    st.session_state.filters = DEFAULT_FILTERS.copy()
+    st.session_state.sort_order = DEFAULT_COMPONENT_STATE['sort_order']
+    st.session_state.current_page = DEFAULT_COMPONENT_STATE['page']
+    # Reset the component communication state as well
+    st.session_state.kickstarter_state_value = None # Indicate no value received for the next run start
+    st.session_state.state_sent_to_component = DEFAULT_COMPONENT_STATE.copy()
+    print("--- Session State Reset Complete ---")
+    # No need to call st.experimental_rerun() - clicking the button triggers it
+
+
 # --- Main App Logic ---
 
-# 1. Get the state dictionary sent by the component on the *previous* run.
-component_state_from_last_run = st.session_state.get("kickstarter_state_value", None) # Default to None
-print(f"Start of Run: Received component value from previous run: {json.dumps(component_state_from_last_run)}")
+# --- Add Reset Button BEFORE the component ---
+st.button("Reset Filters", on_click=reset_app_state, key="native_reset_button")
 
-# Get the state that was SENT to the component in the previous run
+
+# 1. Get state from previous run (same as before)
+component_state_from_last_run = st.session_state.get("kickstarter_state_value", None)
+print(f"Start of Run: Received component value from previous run: {json.dumps(component_state_from_last_run)}")
 state_sent_last_run = st.session_state.get('state_sent_to_component', DEFAULT_COMPONENT_STATE)
 
-# 2. Check if the component actually sent back a *new* state.
-#    Compare the received state with the state we last sent TO the component.
-#    Use JSON dumps for reliable comparison of nested dicts/lists.
+# 2. State Comparison Logic (same as before)
 component_sent_new_state = False
-if component_state_from_last_run is not None:
+# ... (Keep the comparison logic exactly the same as the previous version) ...
+if component_state_from_last_run is not None and isinstance(component_state_from_last_run, dict):
     try:
-        # Normalize by dumping to JSON and reloading (handles potential type differences if careful)
-        # Or just compare JSON strings directly
-        last_run_str = json.dumps(component_state_from_last_run, sort_keys=True)
-        sent_last_run_str = json.dumps(state_sent_last_run, sort_keys=True)
-
-        if last_run_str != sent_last_run_str:
-            component_sent_new_state = True
-            print(f"State received ({last_run_str}) is DIFFERENT from state sent last run ({sent_last_run_str}).")
+        if isinstance(state_sent_last_run, dict):
+            state_received_str = json.dumps(component_state_from_last_run, sort_keys=True)
+            state_sent_str = json.dumps(state_sent_last_run, sort_keys=True)
+            if state_received_str != state_sent_str:
+                component_sent_new_state = True
+                print(f"STATE COMPARISON: State received is DIFFERENT from state sent last run.")
+            else:
+                print(f"STATE COMPARISON: State received is THE SAME as state sent last run.")
         else:
-             print(f"State received ({last_run_str}) is THE SAME as state sent last run ({sent_last_run_str}).")
-
-    except TypeError as e:
-         print(f"Error comparing states using JSON: {e}. Assuming state is new.")
-         # Fallback: Treat as new state if comparison fails
-         component_sent_new_state = True
+             print(f"STATE COMPARISON: 'state_sent_last_run' is not a dict ({type(state_sent_last_run)}). Assuming received state is new.")
+             component_sent_new_state = True
+    except Exception as e:
+        print(f"STATE COMPARISON: Error comparing states: {e}. Assuming received state is new.")
+        component_sent_new_state = True
 else:
-     print("No state received from component in the last run (value is None).")
+     print(f"STATE COMPARISON: No valid state received from component (value is {type(component_state_from_last_run)}).")
 
-
+# 3. Update Session State (conditionally, same as before)
 if component_sent_new_state:
-    print("Component sent NEW state. Updating session state.")
-    # Update Streamlit's internal session state based on the received component value.
-    # Validate the received structure before updating
-    if (isinstance(component_state_from_last_run, dict) and
-            "page" in component_state_from_last_run and
-            "sort_order" in component_state_from_last_run and
-            "filters" in component_state_from_last_run and
-            isinstance(component_state_from_last_run.get("filters"), dict) and
-            all(k in component_state_from_last_run["filters"] for k in DEFAULT_FILTERS.keys())):
-
+    print("ACTION: Component sent NEW state. Updating session state.")
+    # ... (Keep the validation and update logic the same) ...
+    if ( "page" in component_state_from_last_run and
+         "sort_order" in component_state_from_last_run and
+         "filters" in component_state_from_last_run and
+         isinstance(component_state_from_last_run.get("filters"), dict) and
+         all(k in component_state_from_last_run["filters"] for k in DEFAULT_FILTERS.keys()) ):
         st.session_state.current_page = component_state_from_last_run["page"]
         st.session_state.sort_order = component_state_from_last_run["sort_order"]
-        st.session_state.filters = component_state_from_last_run["filters"]
+        st.session_state.filters = json.loads(json.dumps(component_state_from_last_run["filters"])) # Deep copy
         print("Session state updated successfully from component state.")
     else:
-        print(f"Warning: Invalid structure in new component state: {component_state_from_last_run}. NOT updating session state.")
-        # Keep existing session state values
+        print(f"Warning: Invalid structure in new component state received: {component_state_from_last_run}. NOT updating session state.")
 else:
-    # If component didn't send a new value (value is None or same as last sent),
-    # we continue using the existing session state values.
-    print("Component did not send a new state OR received state was invalid. Using existing session state.")
+    print("ACTION: Component did not send a new state OR received state was same/invalid. Using existing session state.")
 
 
 print(f"State for Calculations: Page={st.session_state.current_page}, Sort={st.session_state.sort_order}, Filters={json.dumps(st.session_state.filters)}")
 
 
-# 3. Apply filters and sorting using the *current* session state.
+# 4. Apply Filters, Calculate Totals, Fetch Page (same as before)
+# ... (Keep steps 3, 4, 5 the same - apply_filters_and_sort, calculate total_rows, fetch df_page) ...
+# --- Apply Filters ---
 if 'base_lf' not in st.session_state:
      st.error("Base LazyFrame not found. Please reload.")
      st.stop()
-
 filtered_lf = apply_filters_and_sort(
     st.session_state.base_lf,
     st.session_state.filters,
     st.session_state.sort_order
 )
-
-# 4. Calculate total rows for pagination.
+# --- Calculate Totals ---
 try:
+    # ... calculate total_rows ...
     print("Calculating total rows...")
     start_count_time = time.time()
     total_rows_result = filtered_lf.select(pl.len()).collect(streaming=True)
@@ -2022,77 +1974,66 @@ try:
 except Exception as e:
     st.error(f"Error calculating total rows: {e}")
     st.session_state.total_rows = 0
-
-# 5. Calculate pagination details and fetch the current page data.
+# --- Fetch Page ---
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
-# Clamp current page *after* total rows calculation
 st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
-
 df_page = pl.DataFrame()
+# ... fetch df_page logic ...
 if st.session_state.total_rows > 0 and offset < st.session_state.total_rows and PAGE_SIZE > 0:
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
-        # Add check for specific state filter case
         is_state_filter_active = 'states' in st.session_state.filters and st.session_state.filters['states'] != ['All States']
-        if is_state_filter_active:
-             print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
-
+        if is_state_filter_active: print(f"DEBUG: State filter active: {st.session_state.filters['states']}")
         df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True)
         fetch_duration = time.time() - start_fetch_time
         print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
-        if is_state_filter_active:
-             print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}") # Log head of DF
+        if is_state_filter_active: print(f"DEBUG: Data fetched for state filter: {df_page.head(2)}")
     except Exception as e:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
 else:
      print(f"Skipping page fetch. Total Rows: {st.session_state.total_rows}, Offset: {offset}, Page Size: {PAGE_SIZE}")
 
 
-# 6. Generate HTML for the fetched page.
+# 5. Generate HTML (same as before)
 print("Generating HTML for table...")
 header_html, rows_html = generate_table_html_for_page(df_page)
-if is_state_filter_active: # Log generated HTML specifically for state filter
-    print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
+# ... (optional debug logging) ...
+if is_state_filter_active: print(f"DEBUG: Generated rows_html (first 200 chars): {rows_html[:200]}")
 
 
-# 7. Prepare the data payload to send *to* the component for this render.
+# 6. Prepare Payload and Store Sent State (same as before)
 component_data_payload = {
+    # ... same payload structure ...
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
     "total_rows": st.session_state.total_rows,
-    "filters": st.session_state.filters, # Send the filters used for this render
-    "sort_order": st.session_state.sort_order, # Send the sort order used
+    "filters": st.session_state.filters,
+    "sort_order": st.session_state.sort_order,
     "header_html": header_html,
     "rows_html": rows_html,
-    # Pass metadata needed for UI rendering
     "filter_options": filter_options,
     "category_subcategory_map": category_subcategory_map,
     "min_max_values": min_max_values,
 }
-
-# Store the core state *before* sending it, for comparison on the next run
 state_being_sent_to_component = {
+    # ... same state_being_sent structure ...
     "page": st.session_state.current_page,
     "filters": st.session_state.filters,
     "sort_order": st.session_state.sort_order,
 }
-# Use deep copy if filters dict might be mutated elsewhere, though unlikely here
-st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component)) # Use JSON roundtrip for safe deep copy
+st.session_state.state_sent_to_component = json.loads(json.dumps(state_being_sent_to_component)) # Deep copy
 print(f"State being sent to component this run: {json.dumps(st.session_state.state_sent_to_component)}")
 
 
-# 8. Render the component.
+# 7. Render Component and Store Return Value (same as before)
 print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # Stable key
     default=None # Explicitly set to None
 )
-
-# 9. Store the raw value returned by the component *now* into session state
-#    so it can be read at the START of the *next* script run.
 st.session_state.kickstarter_state_value = component_return_value
 print(f"End of Run: Stored component value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
 
