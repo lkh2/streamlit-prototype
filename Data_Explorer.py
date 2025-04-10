@@ -624,7 +624,7 @@ css = """
         gap: 0.5rem;
         border-top: 1px solid #eee;
         min-height: 60px;
-        border-radius: 20px;
+        border-radius: 0 0 20px 20px;
     }
 
     .page-numbers {
@@ -1441,39 +1441,74 @@ class TableManager {
     }
 
     updatePagination() {
-        const totalPages = Math.max(1, Math.ceil(this.totalRows / this.pageSize));
-        const pageNumbers = this.generatePageNumbers(totalPages);
+        console.log("--- Entering updatePagination ---"); // Log entry
+
+        // --- Explicitly parse numbers and log inputs ---
+        const currentTotalRows = parseInt(this.totalRows || 0, 10); // Default to 0 if undefined/null/NaN after parse
+        const currentPageSize = parseInt(this.pageSize || 10, 10); // Default to 10
+        console.log(`updatePagination: Using parsed totalRows=${currentTotalRows}, pageSize=${currentPageSize}`);
+
+        // --- Perform calculation and log intermediate ---
+        let calculatedPages = 1; // Default to 1 page
+        if (currentPageSize > 0) {
+             calculatedPages = Math.ceil(currentTotalRows / currentPageSize);
+             console.log(`updatePagination: Raw calculated pages (ceil(total/size)) = ${calculatedPages}`);
+        } else {
+             console.log(`updatePagination: Page size is 0 or invalid, defaulting to 1 page.`);
+        }
+
+        // Ensure at least 1 page even if totalRows is 0
+        const totalPages = Math.max(1, calculatedPages);
+        console.log(`updatePagination: Final totalPages (max(1, calculated)) = ${totalPages}`);
+
+
+        const pageNumbers = this.generatePageNumbers(totalPages); // Pass the final calculated totalPages
         const container = document.getElementById('page-numbers');
-        if (!container) return;
+        if (!container) {
+            console.error("Pagination container 'page-numbers' not found!"); // Add error log
+             console.log("--- Exiting updatePagination (Error) ---");
+             return;
+         }
 
         container.innerHTML = pageNumbers.map(page => {
             if (page === '...') {
                 return '<span class="page-ellipsis">...</span>';
             }
-            // Use event listeners instead of inline onclick for better management
             const button = document.createElement('button');
             button.className = `page-number ${page === this.currentPage ? 'active' : ''}`;
             button.textContent = page;
             button.disabled = page === this.currentPage;
-            button.dataset.page = page; // Store page number in data attribute
-            return button.outerHTML; // Return HTML string
+            button.dataset.page = page;
+            return button.outerHTML;
         }).join('');
 
         // Add event listener to the container for delegation
-        // Ensure handlePageClick is bound to the instance 'this'
-        if (!this.handlePageClick) { // Define only once
+        if (!this.handlePageClick) {
              this.handlePageClick = (event) => {
                  if (event.target.classList.contains('page-number') && !event.target.disabled) {
                      this.goToPage(parseInt(event.target.dataset.page));
                  }
              };
         }
-        container.removeEventListener('click', this.handlePageClick); // Remove previous listener if any
+        container.removeEventListener('click', this.handlePageClick);
         container.addEventListener('click', this.handlePageClick);
 
+        // --- Get button elements AFTER generating HTML ---
+        const prevButton = document.getElementById('prev-page');
+        const nextButton = document.getElementById('next-page');
 
-        document.getElementById('prev-page').disabled = this.currentPage <= 1;
-        document.getElementById('next-page').disabled = this.currentPage >= totalPages;
+        if (prevButton) {
+            prevButton.disabled = this.currentPage <= 1;
+        } else {
+            console.error("Previous page button not found!");
+        }
+        if (nextButton) {
+            nextButton.disabled = this.currentPage >= totalPages;
+        } else {
+            console.error("Next page button not found!");
+        }
+
+        console.log("--- Exiting updatePagination ---"); // Log exit
     }
 
     generatePageNumbers(totalPages) {
