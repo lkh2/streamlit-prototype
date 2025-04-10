@@ -2259,11 +2259,64 @@ print("Rendering component with calculated payload...")
 component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # Stable key
-    default=None # Explicitly set to None
+    default=None
 )
 
-# 11. Store the raw component value for potential use at the *start* of the next run.
+# 11. Compare received state with state just sent, and trigger immediate rerun if necessary
+print(f"End of Run: Received value from component: {json.dumps(component_return_value)}")
+# state_sent_this_run = st.session_state.get("state_sent_to_component") # Already have it in state_being_sent_to_component
+
+needs_rerun = False
+if component_return_value is not None:
+    # Basic validation of the received structure
+    if (isinstance(component_return_value, dict) and
+            "page" in component_return_value and
+            "sort_order" in component_return_value and
+            "filters" in component_return_value and
+            isinstance(component_return_value.get("filters"), dict)):
+
+        try:
+            received_state_str = json.dumps(component_return_value, sort_keys=True)
+            # Compare with the state Python just constructed and sent
+            sent_state_str = json.dumps(state_being_sent_this_run, sort_keys=True)
+
+            if received_state_str != sent_state_str:
+                print("Change detected: Component state differs from state JUST sent this run.")
+
+                # --- Update Session State Directly ---
+                # This ensures the *next* run (triggered by rerun) starts with the correct state
+                st.session_state.current_page = component_return_value["page"]
+                st.session_state.sort_order = component_return_value["sort_order"]
+
+                # Safely update filters (redundant validation logic removed for brevity, same as step 3)
+                # (Assuming validation in step 3 is sufficient for the rerun case)
+                # Re-add validation if strictness is needed here too
+                st.session_state.filters = component_return_value["filters"] # Trusting the structure based on initial check
+
+                print("Session state updated based on component return value FOR RERUN.")
+                # --- END Session State Update ---
+
+                needs_rerun = True
+            else:
+                print("No change detected: Component state matches state JUST sent this run.")
+        except Exception as e:
+            print(f"Error during state comparison or update for rerun: {e}")
+    else:
+        print("Warning: Invalid structure received from component at end of run. Skipping comparison/update.")
+else:
+    print("Component returned None at end of run. Skipping comparison.")
+
+
+# 12. Store the raw component value for the *next* script run's step 1
 st.session_state.kickstarter_state_value = component_return_value # Store it regardless
+
+
+# 13. Trigger rerun if needed
+if needs_rerun:
+    print(">>> Triggering st.rerun() <<<")
+    st.rerun()
+else:
+     print("Script run finished normally.")
 print(f"End of Run: Stored component return value for next run: {json.dumps(st.session_state.kickstarter_state_value)}")
 
 
