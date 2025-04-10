@@ -4,10 +4,16 @@ import streamlit.components.v1 as components
 import tempfile, os
 import json
 import polars as pl
+import datetime
+import math
+import html
+
+# --- Constants ---
+PAGE_SIZE = 10
 
 st.set_page_config(
-    layout="wide", 
-    page_icon="📊", 
+    layout="wide",
+    page_icon="📊",
     page_title="Data Explorer",
     initial_sidebar_state="collapsed"
 )
@@ -17,85 +23,91 @@ st.markdown(
     <style>
         [data-testid="stAppViewContainer"] {
             background: linear-gradient(180deg, #2A5D4E 0%, #65897F 50%, #2A5D4E 100%);
-        }  
+        }
         [data-testid="stHeader"] {
             background: transparent;
-        }  
+        }
     </style>
     """,
     unsafe_allow_html=True
 )
 
+
+# --- Component Generation (Simplified) ---
+# We will pass data directly to the component instance now
+# No need for the complex closure structure if we aren't dynamically generating JS
+# based on data *within* the component generation itself.
+# Let's keep generate_component for now, but note its role changes.
 def generate_component(name, template="", script=""):
-    def html():
-        return f"""
+    dir = f"{tempfile.gettempdir()}/{name}"
+    if not os.path.isdir(dir): os.mkdir(dir)
+    fname = f'{dir}/index.html'
+    with open(fname, 'w') as f:
+        f.write(f"""
             <!DOCTYPE html>
             <html lang="en">
-                <head>
-                    <link href='https://fonts.googleapis.com/css?family=Poppins' rel='stylesheet'>
-                    <link href='https://fonts.googleapis.com/css?family=Playfair Display' rel='stylesheet'>
-                    <meta charset="UTF-8" />
-                    <title>{name}</title>
-                    <script>
-                        function sendMessageToStreamlitClient(type, data) {{
-                            const outData = Object.assign({{
-                                isStreamlitMessage: true,
-                                type: type,
-                            }}, data);
-                            window.parent.postMessage(outData, "*");
-                        }}
+            <head>
+                <link href='https://fonts.googleapis.com/css?family=Poppins' rel='stylesheet'>
+                <link href='https://fonts.googleapis.com/css?family=Playfair Display' rel='stylesheet'>
+                <meta charset="UTF-8" />
+                <title>{name}</title>
+                <script>
+                    function sendMessageToStreamlitClient(type, data) {{
+                        const outData = Object.assign({{
+                            isStreamlitMessage: true,
+                            type: type,
+                        }}, data);
+                        window.parent.postMessage(outData, "*");
+                    }}
 
-                        const Streamlit = {{
-                            setComponentReady: function() {{
-                                sendMessageToStreamlitClient("streamlit:componentReady", {{apiVersion: 1}});
-                            }},
-                            setFrameHeight: function(height) {{
-                                sendMessageToStreamlitClient("streamlit:setFrameHeight", {{height: height}});
-                            }},
-                            setComponentValue: function(value) {{
-                                sendMessageToStreamlitClient("streamlit:setComponentValue", {{value: value}});
-                            }},
-                            RENDER_EVENT: "streamlit:render",
-                            events: {{
-                                addEventListener: function(type, callback) {{
-                                    window.addEventListener("message", function(event) {{
-                                        if (event.data.type === type) {{
-                                            event.detail = event.data
-                                            callback(event);
-                                        }}
-                                    }});
-                                }}
+                    const Streamlit = {{
+                        setComponentReady: function() {{
+                            sendMessageToStreamlitClient("streamlit:componentReady", {{apiVersion: 1}});
+                        }},
+                        setFrameHeight: function(height) {{
+                            sendMessageToStreamlitClient("streamlit:setFrameHeight", {{height: height}});
+                        }},
+                        setComponentValue: function(value) {{
+                            sendMessageToStreamlitClient("streamlit:setComponentValue", {{value: value}});
+                        }},
+                        RENDER_EVENT: "streamlit:render",
+                        events: {{
+                            addEventListener: function(type, callback) {{
+                                window.addEventListener("message", function(event) {{
+                                    if (event.data.type === type) {{
+                                        event.detail = event.data
+                                        callback(event);
+                                    }}
+                                }});
                             }}
                         }}
-                    </script>
-                </head>
+                    }}
+                </script>
+                {template}
+            </head>
             <body>
-            {template}
+                <div id="component-root"></div>
             </body>
             <script>
                 {script}
             </script>
             </html>
-        """
+        """)
 
-    dir = f"{tempfile.gettempdir()}/{name}"
-    if not os.path.isdir(dir): os.mkdir(dir)
-    fname = f'{dir}/index.html'
-    with open(fname, 'w') as f:
-        f.write(html())
-    
-    func = components.declare_component(name, path=str(dir))
-    def f(**params):
-        component_value = func(**params)
+    _component_func = components.declare_component(name, path=str(dir))
+
+    def component_wrapper(component_data, key=None, default=None):
+        component_value = _component_func(component_data=component_data, key=key, default=default)
         return component_value
-    return f
+    return component_wrapper
 
-# *** IMPORTANT: Process the Parquet file before running this script (See README.md) ***
+
+# --- Data Loading and Metadata ---
 parquet_source_path = "data.parquet"
-filter_metadata_path = "filter_metadata.json" # Define path for metadata
+filter_metadata_path = "filter_metadata.json"
 
-# --- Load Filter Metadata ---
-filter_options = { # Default structure
+# Default structure (remains the same)
+filter_options = {
     'categories': ['All Categories'],
     'countries': ['All Countries'],
     'states': ['All States'],
@@ -111,8 +123,9 @@ min_max_values = {
     'raised': {'min': 0, 'max': 500}
 }
 
+# Load metadata (remains largely the same, maybe add more robust defaults)
 if not os.path.exists(filter_metadata_path):
-    st.error(f"Filter metadata file not found at '{filter_metadata_path}'. Please run the data processing script (`database_download.py`) first.")
+    st.error(f"Filter metadata file not found at '{filter_metadata_path}'. Please run `database_download.py` first.")
     st.stop()
 else:
     try:
@@ -120,10 +133,9 @@ else:
             loaded_metadata = json.load(f)
 
         # Validate and load categories, countries, states
-        filter_options['categories'] = loaded_metadata.get('categories', ['All Categories'])
-        filter_options['countries'] = loaded_metadata.get('countries', ['All Countries'])
-        # Ensure states are loaded correctly (should be capitalized plain names)
-        filter_options['states'] = loaded_metadata.get('states', ['All States'])
+        filter_options['categories'] = loaded_metadata.get('categories') or ['All Categories']
+        filter_options['countries'] = loaded_metadata.get('countries') or ['All Countries']
+        filter_options['states'] = loaded_metadata.get('states') or ['All States']
         filter_options['date_ranges'] = loaded_metadata.get('date_ranges', filter_options['date_ranges']) # Load if present, else keep default
 
         # Load category-subcategory map
@@ -131,14 +143,16 @@ else:
         # Ensure 'All Categories' entry exists and has 'All Subcategories'
         if 'All Categories' not in category_subcategory_map:
             category_subcategory_map['All Categories'] = ['All Subcategories']
-        if 'All Subcategories' not in category_subcategory_map['All Categories']:
+        if category_subcategory_map['All Categories'] and 'All Subcategories' not in category_subcategory_map['All Categories']:
              category_subcategory_map['All Categories'].insert(0, 'All Subcategories')
+
         # Add all unique subcategories to 'All Categories' list if not already present
         all_subs = set(loaded_metadata.get('subcategories', ['All Subcategories']))
-        all_cats_subs = set(category_subcategory_map['All Categories'])
+        all_cats_subs = set(category_subcategory_map.get('All Categories', []))
         missing_subs = all_subs - all_cats_subs
         if missing_subs:
              category_subcategory_map['All Categories'].extend(sorted(list(missing_subs)))
+             category_subcategory_map['All Categories'] = sorted(list(set(category_subcategory_map['All Categories'])), key=lambda x: (x != 'All Subcategories', x))
 
 
         # Load min/max values, keeping defaults if keys are missing
@@ -162,112 +176,217 @@ max_goal = min_max_values['goal']['max']
 min_raised = min_max_values['raised']['min']
 max_raised = min_max_values['raised']['max']
 
-# --- Load Parquet Data ---
-if not os.path.exists(parquet_source_path):
-    st.error(f"Parquet data source not found at '{parquet_source_path}'. Please ensure the file/directory exists in the project root.")
-    st.stop()
+# --- Initialize Session State ---
+if 'filters' not in st.session_state:
+    st.session_state.filters = {
+        'search': '',
+        'categories': ['All Categories'],
+        'subcategories': ['All Subcategories'],
+        'countries': ['All Countries'],
+        'states': ['All States'],
+        'date': 'All Time',
+        'ranges': {
+            'pledged': {'min': min_pledged, 'max': max_pledged},
+            'goal': {'min': min_goal, 'max': max_goal},
+            'raised': {'min': min_raised, 'max': max_raised}
+        }
+    }
+if 'sort_order' not in st.session_state:
+    st.session_state.sort_order = 'popularity' # Default sort
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 1
+if 'total_rows' not in st.session_state:
+    st.session_state.total_rows = 0 # Will be calculated
 
-lf: pl.LazyFrame | None = None 
-try:
-    print(f"Scanning Parquet source: {parquet_source_path}")
-    lf = pl.scan_parquet(parquet_source_path) 
-    print("LazyFrame created successfully from source.")
-except Exception as e:
-     st.error(f"Error scanning the Parquet source '{parquet_source_path}': {e}")
-     if hasattr(e, 'context_stack'):
-         context_info = getattr(e, 'context_stack', 'Not available') 
-         st.error(f"Context stack: {context_info}")
-     else:
-          st.error("Context stack information not available.") 
-     st.stop()
 
-try:
-    collected_schema = lf.collect_schema() 
-    schema_check = lf.head(0).collect()
-    if schema_check.width == 0 :
-         st.error(f"Loaded data from '{parquet_source_path}' appears to have no columns or is invalid. Please check the source file/directory.")
-         st.stop()
-    print("LazyFrame Schema:", collected_schema)
-except Exception as e:
-     st.error(f"Error during initial data check on '{parquet_source_path}': {e}. Cannot proceed.")
-     st.stop()
+# --- Base LazyFrame ---
+if 'base_lf' not in st.session_state:
+    if not os.path.exists(parquet_source_path):
+        st.error(f"Parquet data source not found at '{parquet_source_path}'. Please ensure the file/directory exists.")
+        st.stop()
 
-if 'State' in collected_schema:
-    lf = lf.with_columns(
-        (
-            pl.lit('<div class="state_cell state-')
-            + pl.col('State').str.to_lowercase().fill_null('unknown')
-            + pl.lit('">')
-            + pl.col('State').str.to_lowercase().fill_null('unknown')
-            + pl.lit('</div>')
-        ).alias('State')
-    )
-else:
-    st.warning("Column 'State' not found in the schema. Skipping state styling.")
+    try:
+        print(f"Scanning Parquet source: {parquet_source_path}")
+        base_lf = pl.scan_parquet(parquet_source_path)
 
-print("Schema before final collect:", lf.collect_schema())
+        # Pre-process state column for styling (do this once on the base frame)
+        if 'State' in base_lf.columns:
+             base_lf = base_lf.with_columns(
+                 (
+                     pl.lit('<div class="state_cell state-')
+                     + pl.col('State').str.to_lowercase().fill_null('unknown')
+                     + pl.lit('">')
+                     + pl.col('State').str.to_lowercase().fill_null('unknown') # Keep original case for display if needed, or use capitalized later
+                     + pl.lit('</div>')
+                 ).alias('Styled State') # Use a different name to avoid conflict if 'State' is needed raw
+             ).rename({'Styled State': 'State'}) # Rename back if needed, or adjust column usage later
 
-df_collected = None
-try:
-    print("Collecting final DataFrame for display...")
-    start_collect_time = time.time()
-
-    df_collected = lf.collect(engine='streaming')
-    collect_duration = time.time() - start_collect_time
-    print(f"Data collection took {collect_duration:.2f} seconds.")
-
-    loaded = st.success(f"Loaded {len(df_collected)} projects successfully!")
-    time.sleep(1.5)
-    loaded.empty()
-except Exception as e:
-    st.error(f"Error collecting final DataFrame: {e}")
-    df_collected = pl.DataFrame()
-
-if df_collected.is_empty():
-     is_source_empty = False
-     try:
-         is_source_empty = lf.head(1).collect().is_empty()
-     except Exception as check_err:
-         print(f"Could not check if source is empty after failed collect: {check_err}")
-
-     if is_source_empty:
-         st.warning("Data source is empty. Displaying empty table.")
-         try:
-             df_collected = lf.head(0).collect()
-         except Exception:
-             st.error("Could not retrieve schema from empty source. Stopping.")
+        print("Base LazyFrame created and processed.")
+        st.session_state.base_lf = base_lf
+        # Initial schema check
+        if st.session_state.base_lf.head(0).collect().width == 0:
+             st.error(f"Loaded data from '{parquet_source_path}' has no columns.")
              st.stop()
-     else:
-         st.error("Data collection resulted in an empty DataFrame or failed. Cannot display table.")
-         st.stop()
 
-def generate_table_html(df_display: pl.DataFrame): 
+    except Exception as e:
+        st.error(f"Error scanning Parquet or initial processing: {e}")
+        st.stop()
+
+# --- Filtering and Sorting Logic ---
+def apply_filters_and_sort(lf: pl.LazyFrame, filters: dict, sort_order: str) -> pl.LazyFrame:
+    """Applies filters and sorting to a LazyFrame."""
+    
+    # 1. Text Search (Apply across relevant text columns)
+    search_term = filters.get('search', '')
+    if search_term:
+        # Add columns you want to search here
+        search_cols = ['Project Name', 'Creator', 'Category', 'Subcategory']
+        # Filter columns that actually exist in the frame
+        valid_search_cols = [col for col in search_cols if col in lf.columns]
+        if valid_search_cols:
+            search_expr = None
+            for col in valid_search_cols:
+                 # Case-insensitive contains
+                 current_expr = pl.col(col).str.contains(f"(?i){search_term}") 
+                 if search_expr is None:
+                     search_expr = current_expr
+                 else:
+                     search_expr = search_expr | current_expr # OR condition
+            if search_expr is not None:
+                 lf = lf.filter(search_expr)
+
+    # 2. Categorical Filters
+    if 'Category' in lf.columns and filters['categories'] != ['All Categories']:
+        lf = lf.filter(pl.col('Category').is_in(filters['categories']))
+    if 'Subcategory' in lf.columns and filters['subcategories'] != ['All Subcategories']:
+        # Handle potential interaction with category filter if needed, assuming independent for now
+        lf = lf.filter(pl.col('Subcategory').is_in(filters['subcategories']))
+    if 'Country' in lf.columns and filters['countries'] != ['All Countries']:
+        lf = lf.filter(pl.col('Country').is_in(filters['countries']))
+        
+    # State filter needs the original state name if filtering before styling
+    # If filtering *after* styling, you'd parse the HTML, which is inefficient.
+    # Let's assume 'Raw State' exists or filter before styling.
+    # *Correction*: Since we styled 'State' earlier, we need to filter based on the original state value.
+    # Let's assume a 'Raw State' column exists from processing, or modify the styling step.
+    # For now, let's skip state filtering on the server-side if 'Raw State' isn't available.
+    # *Alternative*: If 'State' contains the styled HTML, we can't filter easily server-side.
+    # Let's revert the State styling for now and apply it only during HTML generation for the collected page.
+    
+    # Revert State Styling from base_lf if applied
+    if 'State' in st.session_state.base_lf.columns and isinstance(st.session_state.base_lf.schema['State'], pl.datatypes.Utf8) and '<div' in st.session_state.base_lf.select('State').head(1).collect().item():
+         print("Warning: State column was pre-styled. Reverting for filtering. Consider styling only in generate_table_html.")
+         # This is tricky - we need the original state. Assume 'Raw State' exists or skip.
+         if 'Raw State' in lf.columns and filters['states'] != ['All States']:
+              lf = lf.filter(pl.col('Raw State').str.to_lowercase().is_in([s.lower() for s in filters['states']]))
+         # else: st.warning("Cannot filter by State server-side as 'State' column is pre-styled HTML and 'Raw State' is missing.")
+
+    # 3. Range Filters
+    ranges = filters.get('ranges', {})
+    if 'Raw Pledged' in lf.columns and 'pledged' in ranges:
+        min_p, max_p = ranges['pledged']['min'], ranges['pledged']['max']
+        lf = lf.filter((pl.col('Raw Pledged') >= min_p) & (pl.col('Raw Pledged') <= max_p))
+    if 'Raw Goal' in lf.columns and 'goal' in ranges:
+        min_g, max_g = ranges['goal']['min'], ranges['goal']['max']
+        lf = lf.filter((pl.col('Raw Goal') >= min_g) & (pl.col('Raw Goal') <= max_g))
+    if 'Raw Raised' in lf.columns and 'raised' in ranges:
+        min_r, max_r = ranges['raised']['min'], ranges['raised']['max']
+        # Handle division by zero for goal if necessary for percentage calculation
+        # Ensure 'Raw Raised' column exists and represents the percentage directly, or calculate it
+        # Assuming 'Raw Raised' IS the percentage already calculated during data processing
+        lf = lf.filter((pl.col('Raw Raised') >= min_r) & (pl.col('Raw Raised') <= max_r))
+
+
+    # 4. Date Filter
+    date_filter = filters.get('date', 'All Time')
+    if date_filter != 'All Time' and 'Raw Date' in lf.columns:
+        now = datetime.datetime.now()
+        compare_date = None
+        if date_filter == 'Last Month':
+            compare_date = now - datetime.timedelta(days=30) # Approximation
+        elif date_filter == 'Last 6 Months':
+            compare_date = now - datetime.timedelta(days=182) # Approximation
+        elif date_filter == 'Last Year':
+            compare_date = now - datetime.timedelta(days=365)
+        elif date_filter == 'Last 5 Years':
+            compare_date = now - datetime.timedelta(days=5*365)
+        elif date_filter == 'Last 10 Years':
+            compare_date = now - datetime.timedelta(days=10*365)
+
+        if compare_date:
+             # Ensure Raw Date is datetime type
+             lf = lf.with_columns(pl.col("Raw Date").cast(pl.Datetime).alias("Raw Date"))
+             lf = lf.filter(pl.col('Raw Date') >= compare_date)
+
+
+    # 5. Sorting
+    sort_descending = True
+    sort_col = 'Popularity Score' # Default for 'popularity'
+
+    if sort_order == 'newest':
+        sort_col = 'Raw Date'
+        sort_descending = True
+    elif sort_order == 'oldest':
+        sort_col = 'Raw Date'
+        sort_descending = False
+    elif sort_order == 'mostfunded':
+        sort_col = 'Raw Pledged'
+        sort_descending = True
+    elif sort_order == 'mostbacked':
+        sort_col = 'Backer Count'
+        sort_descending = True
+    elif sort_order == 'enddate':
+        sort_col = 'Raw Deadline'
+        sort_descending = True # Show soonest ending? Or latest ending? Assuming latest.
+
+    if sort_col in lf.columns:
+        lf = lf.sort(sort_col, descending=sort_descending, nulls_last=True)
+    else:
+        print(f"Warning: Sort column '{sort_col}' not found in LazyFrame.")
+
+
+    return lf
+
+# --- Generate HTML for the *current page* data ---
+def generate_table_html_for_page(df_page: pl.DataFrame):
     visible_columns = ['Project Name', 'Creator', 'Pledged Amount', 'Link', 'Country', 'State']
 
+    # Check required cols *exist* in the dataframe schema, not necessarily fetched for every row if null
     required_data_cols = [
         'Category', 'Subcategory', 'Raw Pledged', 'Raw Goal', 'Raw Raised',
         'Raw Date', 'Raw Deadline', 'Backer Count', 'Popularity Score'
     ]
-    missing_data_cols = [col for col in required_data_cols if col not in df_display.columns]
-    if missing_data_cols:
-        st.error(f"FATAL: Missing required columns for table generation: {missing_data_cols}. Check data processing steps.")
+    # Also need the visible columns
+    all_needed_cols = list(set(visible_columns + required_data_cols + ['State'])) # Add state explicitly
 
-    missing_visible_cols = [col for col in visible_columns if col not in df_display.columns]
-    if missing_visible_cols:
-         st.warning(f"Missing visible columns for table: {missing_visible_cols}. Check database_download.py or initial data processing.")
-         visible_columns = [col for col in visible_columns if col in df_display.columns]
-         if not visible_columns:
-              return "", ""
+    missing_cols = [col for col in all_needed_cols if col not in df_page.columns]
+    if missing_cols:
+        st.error(f"FATAL: Missing required columns in fetched data page: {missing_cols}. Check base Parquet schema and processing.")
+        # Return empty if critical columns are missing
+        return (''.join(f'<th scope="col">{column}</th>' for column in visible_columns),
+                '<tr><td colspan="{}">Error: Missing critical data columns.</td></tr>'.format(len(visible_columns)))
+
 
     header_html = ''.join(f'<th scope="col">{column}</th>' for column in visible_columns)
     rows_html = ''
+
+    if df_page.is_empty():
+        return header_html, f'<tr><td colspan="{len(visible_columns)}">No projects match the current filters.</td></tr>'
+
     try:
-        data_dicts = df_display.to_dicts()
+        data_dicts = df_page.to_dicts()
     except Exception as e:
-        st.error(f"Error converting DataFrame to dictionaries: {e}")
-        return header_html, ""
+        st.error(f"Error converting page DataFrame to dictionaries: {e}")
+        return header_html, f'<tr><td colspan="{len(visible_columns)}">Error rendering rows.</td></tr>'
 
     for row in data_dicts:
+        # Apply State styling here
+        state_value = row.get('State', 'unknown') # Get original state value
+        state_class = str(state_value).lower().replace(' ', '-') if state_value else 'unknown'
+        styled_state_html = f'<div class="state_cell state-{state_class}">{state_value}</div>' if state_value else 'N/A'
+
+
+        # Data attributes for potential client-side use (though filtering is server-side)
         data_attrs = f'''
             data-category="{row.get('Category', 'N/A')}"
             data-subcategory="{row.get('Subcategory', 'N/A')}"
@@ -285,192 +404,31 @@ def generate_table_html(df_display: pl.DataFrame):
             if col == 'Link':
                 url = str(value) if value else '#'
                 display_url = url if len(url) < 60 else url[:57] + '...'
-                visible_cells += f'<td><a href="{url}" target="_blank" title="{url}">{display_url}</a></td>'
+                visible_cells += f'<td><a href="{html.escape(url)}" target="_blank" title="{html.escape(url)}">{html.escape(display_url)}</a></td>'
             elif col == 'Pledged Amount':
-                # Use Raw Pledged for accurate formatting if available, else fallback
-                raw_pledged_val = row.get('Raw Pledged')
-                if raw_pledged_val is not None:
-                    try:
-                        amount = int(float(raw_pledged_val))
-                        formatted_value = f"${amount:,}"
-                    except (ValueError, TypeError):
-                         # Fallback to display value if Raw Pledged fails
-                         amount_disp = value # value is 'Pledged Amount' here
-                         try:
-                              amount = int(float(amount_disp))
-                              formatted_value = f"${amount:,}"
-                         except (ValueError, TypeError):
-                              formatted_value = 'N/A'
-                else: # Fallback if Raw Pledged doesn't exist
+                 raw_pledged_val = row.get('Raw Pledged')
+                 formatted_value = 'N/A'
+                 if raw_pledged_val is not None:
                      try:
-                          amount = int(float(value)) # value is 'Pledged Amount'
-                          formatted_value = f"${amount:,}"
+                         amount = int(float(raw_pledged_val))
+                         formatted_value = f"${amount:,}"
                      except (ValueError, TypeError):
-                          formatted_value = 'N/A'
-
-                import html # Ensure html is imported
-                visible_cells += f'<td>{html.escape(formatted_value)}</td>'
+                         pass # Keep N/A
+                 visible_cells += f'<td>{html.escape(formatted_value)}</td>'
             elif col == 'State':
-                 state_html = str(value) if value is not None else 'N/A'
-                 visible_cells += f'<td>{state_html}</td>'
+                 visible_cells += f'<td>{styled_state_html}</td>'
             else:
-                import html
                 visible_cells += f'<td>{html.escape(str(value))}</td>'
 
         rows_html += f'<tr class="table-row" {data_attrs}>{visible_cells}</tr>'
 
     return header_html, rows_html
 
-header_html, rows_html = generate_table_html(df_collected)
 
-template = f"""
-<script>
-    window.categorySubcategoryMap = {json.dumps(category_subcategory_map)};
-</script>
-<div class="title-wrapper">
-    <span>Explore Successful Projects</span>
-</div>
-<div class="filter-wrapper">
-    <div class="reset-wrapper">
-        <button class="reset-button" id="resetFilters">
-            <span>Default</span>
-        </button>
-    </div>
-    <div class="filter-controls">
-        <div class="filter-row">
-            <span class="filter-label">Explore</span>
-            <div class="multi-select-dropdown">
-                <button id="categoryFilterBtn" class="filter-select multi-select-btn">Categories</button>
-                <div class="multi-select-content">
-                    {' '.join(f'<div class="category-option" data-value="{opt}">{opt}</div>' for opt in filter_options['categories'])}
-                </div>
-            </div>
-            <span class="filter-label">&</span>
-            <div class="multi-select-dropdown">
-                <button id="subcategoryFilterBtn" class="filter-select multi-select-btn">Subcategories</button>
-                <div class="multi-select-content" id="subcategoryOptionsContainer">
-                    {' '.join(f'<div class="subcategory-option" data-value="{opt}">{opt}</div>' for opt in category_subcategory_map.get('All Categories', ['All Subcategories']))}
-                </div>
-            </div>
-            <span class="filter-label">Projects On</span>
-            <div class="multi-select-dropdown">
-                <button id="countryFilterBtn" class="filter-select multi-select-btn">Countries</button>
-                <div class="multi-select-content">
-                    {' '.join(f'<div class="country-option" data-value="{opt}">{opt}</div>' for opt in filter_options['countries'])}
-                </div>
-            </div>
-            <span class="filter-label">Sorted By</span>
-            <select id="sortFilter" class="filter-select">
-                <option value="popularity" selected>Most Popular</option>
-                <option value="newest">Newest First</option>
-                <option value="oldest">Oldest First</option>
-                <option value="mostfunded">Most Funded</option>
-                <option value="mostbacked">Most Backed</option>
-                <option value="enddate">End Date</option>
-            </select>
-        </div>
-        <div class="filter-row">
-            <span class="filter-label">More Flexible, Dynamic Search:</span>
-            <div class="multi-select-dropdown">
-                <button id="stateFilterBtn" class="filter-select multi-select-btn">States</button>
-                <div class="multi-select-content">
-                    {' '.join(f'<div class="state-option" data-value="{opt}">{opt}</div>' for opt in filter_options['states'])}
-                </div>
-            </div>
-            <div class="range-dropdown">
-                <button class="filter-select">Pledged Amount Range</button>
-                <div class="range-content">
-                    <div class="range-container">
-                        <div class="sliders-control">
-                            <input id="fromSlider" type="range" value="{min_pledged}" min="{min_pledged}" max="{max_pledged}"/>
-                            <input id="toSlider" type="range" value="{max_pledged}" min="{min_pledged}" max="{max_pledged}"/>
-                        </div>
-                        <div class="form-control">
-                            <div class="form-control-container">
-                                <span class="form-control-label">Min $</span>
-                                <input class="form-control-input" type="number" id="fromInput" value="{min_pledged}" min="{min_pledged}" max="{max_pledged}"/>
-                            </div>
-                            <div class="form-control-container">
-                                <span class="form-control-label">Max $</span>
-                                <input class="form-control-input" type="number" id="toInput" value="{max_pledged}" min="{min_pledged}" max="{max_pledged}"/>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="range-dropdown">
-                <button class="filter-select">Goal Amount Range</button>
-                <div class="range-content">
-                    <div class="range-container">
-                        <div class="sliders-control">
-                            <input id="goalFromSlider" type="range" value="{min_goal}" min="{min_goal}" max="{max_goal}"/>
-                            <input id="goalToSlider" type="range" value="{max_goal}" min="{min_goal}" max="{max_goal}"/>
-                        </div>
-                        <div class="form-control">
-                            <div class="form-control-container">
-                                <span class="form-control-label">Min $</span>
-                                <input class="form-control-input" type="number" id="goalFromInput" value="{min_goal}" min="{min_goal}" max="{max_goal}"/>
-                            </div>
-                            <div class="form-control-container">
-                                <span class="form-control-label">Max $</span>
-                                <input class="form-control-input" type="number" id="goalToInput" value="{max_goal}" min="{min_goal}" max="{max_goal}"/>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="range-dropdown">
-                <button class="filter-select">Percentage Raised Range</button>
-                <div class="range-content">
-                    <div class="range-container">
-                        <div class="sliders-control">
-                            <input id="raisedFromSlider" type="range" value="{min_raised}" min="{min_raised}" max="{max_raised}"/>
-                            <input id="raisedToSlider" type="range" value="{max_raised}" min="{min_raised}" max="{max_raised}"/>
-                        </div>
-                        <div class="form-control">
-                            <div class="form-control-container">
-                                <span class="form-control-label">Min %</span>
-                                <input class="form-control-input" type="number" id="raisedFromInput" value="{min_raised}" min="{min_raised}" max="{max_raised}"/>
-                            </div>
-                            <div class="form-control-container">
-                                <span class="form-control-label">Max %</span>
-                                <input class="form-control-input" type="number" id="raisedToInput" value="{max_raised}" min="{min_raised}" max="{max_raised}"/>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <select id="dateFilter" class="filter-select">
-                {' '.join(f'<option value="{opt}">{opt}</option>' for opt in filter_options['date_ranges'])}
-            </select>
-        </div>
-    </div>
-</div>
-<div class="table-wrapper">
-    <div class="table-controls">
-        <span class="filtered-text">Filtered Projects</span>
-        <input type="text" id="table-search" class="search-input" placeholder="Search table...">
-    </div>
-    <div class="table-container">
-        <table id="data-table">
-            <thead>
-                <tr>{header_html}</tr>
-            </thead>
-            <tbody>
-                {rows_html}
-            </tbody>
-        </table>
-    </div>
-    <div class="pagination-controls">
-        <button id="prev-page" class="page-btn" aria-label="Previous page">&lt;</button>
-        <div id="page-numbers" class="page-numbers"></div>
-        <button id="next-page" class="page-btn" aria-label="Next page">&gt;</button>
-    </div>
-</div>
-"""
-
+# --- Define Component ---
+# Load CSS and JS script strings (Keep these as they are for now)
 css = """
-<style> 
+<style>
     .title-wrapper {
         width: 100%;
         text-align: center;    
@@ -1004,935 +962,951 @@ css = """
         margin-bottom: 8px;
         padding-bottom: 12px;
     }
+
+    body { font-family: 'Poppins', sans-serif; margin: 0; padding: 20px; box-sizing: border-box; }
+    #component-root { width: 100%; }
+    /* Add a loading indicator style */
+    .loading-overlay {
+        position: absolute;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(255, 255, 255, 0.7);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        z-index: 100;
+        font-size: 1.2em;
+        color: #555;
+    }
+    .hidden { display: none; }
 </style>
 """
 
 script = """
-    function debounce(func, wait) {
-        let timeout;
-        return function(...args) {
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => {
             clearTimeout(timeout);
-            timeout = setTimeout(() => func.apply(this, args), wait);
+            func.apply(this, args);
         };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+
+class TableManager {
+    constructor(initialData) {
+        console.log("TableManager initializing with:", initialData);
+        this.componentRoot = document.getElementById('component-root');
+        if (!this.componentRoot) {
+            console.error("Component root element not found!");
+            return;
+        }
+
+        // Initial state from Streamlit
+        this.currentPage = initialData.current_page || 1;
+        this.pageSize = initialData.page_size || 10;
+        this.totalRows = initialData.total_rows || 0;
+        this.currentFilters = initialData.filters || {};
+        this.currentSort = initialData.sort_order || 'popularity';
+        this.filterOptions = initialData.filter_options || {};
+        this.categorySubcategoryMap = initialData.category_subcategory_map || {};
+        this.minMaxValues = initialData.min_max_values || {};
+
+        this.renderHTMLStructure(initialData.header_html);
+        this.bindStaticElements(); // Bind elements that exist once after initial render
+        this.updateUIState(initialData); // Set initial values for filters etc.
+        this.updateTableContent(initialData.rows_html); // Populate initial table rows
+        this.updatePagination(); // Create initial pagination
+        this.adjustHeight(); // Adjust height after initial render
+
+        console.log("TableManager initialized.");
     }
 
-    function createRegexPattern(searchTerm) {
-        if (!searchTerm) return null;
-        const words = searchTerm.split(/\\s+/).filter(word => word.length > 0);
-        const escapedWords = words.map(word => 
-            word.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')
-        );
-        return new RegExp(escapedWords.map(word => `(?=.*${word})`).join(''), 'i');
+    renderHTMLStructure(headerHtml) {
+        // Create the main structure once
+        const minPledged = this.minMaxValues?.pledged?.min ?? 0;
+        const maxPledged = this.minMaxValues?.pledged?.max ?? 1000;
+        const minGoal = this.minMaxValues?.goal?.min ?? 0;
+        const maxGoal = this.minMaxValues?.goal?.max ?? 10000;
+        const minRaised = this.minMaxValues?.raised?.min ?? 0;
+        const maxRaised = this.minMaxValues?.raised?.max ?? 500;
+
+        this.componentRoot.innerHTML = `
+            <div class="title-wrapper">
+                <span>Explore Successful Projects</span>
+            </div>
+            <div class="filter-wrapper">
+                 <div class="reset-wrapper">
+                     <button class="reset-button" id="resetFilters">
+                         <span>Default</span>
+                     </button>
+                 </div>
+                 <div class="filter-controls">
+                     <div class="filter-row">
+                         <span class="filter-label">Explore</span>
+                         <div class="multi-select-dropdown">
+                             <button id="categoryFilterBtn" class="filter-select multi-select-btn">Categories</button>
+                             <div class="multi-select-content" id="categoryOptionsContainer">
+                                 ${(this.filterOptions.categories || []).map(opt => `<div class="category-option" data-value="${opt}">${opt}</div>`).join('')}
+                             </div>
+                         </div>
+                         <span class="filter-label">&</span>
+                         <div class="multi-select-dropdown">
+                             <button id="subcategoryFilterBtn" class="filter-select multi-select-btn">Subcategories</button>
+                             <div class="multi-select-content" id="subcategoryOptionsContainer">
+                                 <!-- Populated dynamically -->
+                             </div>
+                         </div>
+                         <span class="filter-label">Projects On</span>
+                         <div class="multi-select-dropdown">
+                             <button id="countryFilterBtn" class="filter-select multi-select-btn">Countries</button>
+                             <div class="multi-select-content" id="countryOptionsContainer">
+                                ${ (this.filterOptions.countries || []).map(opt => `<div class="country-option" data-value="${opt}">${opt}</div>`).join('')}
+                             </div>
+                         </div>
+                         <span class="filter-label">Sorted By</span>
+                         <select id="sortFilter" class="filter-select">
+                             <option value="popularity">Most Popular</option>
+                             <option value="newest">Newest First</option>
+                             <option value="oldest">Oldest First</option>
+                             <option value="mostfunded">Most Funded</option>
+                             <option value="mostbacked">Most Backed</option>
+                             <option value="enddate">End Date</option>
+                         </select>
+                     </div>
+                     <div class="filter-row">
+                        <span class="filter-label">More Flexible, Dynamic Search:</span>
+                        <div class="multi-select-dropdown">
+                            <button id="stateFilterBtn" class="filter-select multi-select-btn">States</button>
+                            <div class="multi-select-content" id="stateOptionsContainer">
+                                ${ (this.filterOptions.states || []).map(opt => `<div class="state-option" data-value="${opt}">${opt}</div>`).join('')}
+                            </div>
+                        </div>
+                        <div class="range-dropdown">
+                            <button class="filter-select">Pledged Amount Range</button>
+                             <div class="range-content">
+                                <div class="range-container">
+                                    <div class="sliders-control">
+                                        <input id="fromSlider" type="range" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                        <input id="toSlider" type="range" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                    </div>
+                                    <div class="form-control">
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Min $</span>
+                                            <input class="form-control-input" type="number" id="fromInput" value="${minPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                        </div>
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Max $</span>
+                                            <input class="form-control-input" type="number" id="toInput" value="${maxPledged}" min="${minPledged}" max="${maxPledged}"/>
+                                        </div>
+                                    </div>
+                                </div>
+                             </div>
+                        </div>
+                        <div class="range-dropdown">
+                            <button class="filter-select">Goal Amount Range</button>
+                             <div class="range-content">
+                                <div class="range-container">
+                                    <div class="sliders-control">
+                                        <input id="goalFromSlider" type="range" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                        <input id="goalToSlider" type="range" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                    </div>
+                                    <div class="form-control">
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Min $</span>
+                                            <input class="form-control-input" type="number" id="goalFromInput" value="${minGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                        </div>
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Max $</span>
+                                            <input class="form-control-input" type="number" id="goalToInput" value="${maxGoal}" min="${minGoal}" max="${maxGoal}"/>
+                                        </div>
+                                    </div>
+                                </div>
+                             </div>
+                        </div>
+                        <div class="range-dropdown">
+                            <button class="filter-select">Percentage Raised Range</button>
+                            <div class="range-content">
+                                <div class="range-container">
+                                    <div class="sliders-control">
+                                        <input id="raisedFromSlider" type="range" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                        <input id="raisedToSlider" type="range" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                    </div>
+                                    <div class="form-control">
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Min %</span>
+                                            <input class="form-control-input" type="number" id="raisedFromInput" value="${minRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                        </div>
+                                        <div class="form-control-container">
+                                            <span class="form-control-label">Max %</span>
+                                            <input class="form-control-input" type="number" id="raisedToInput" value="${maxRaised}" min="${minRaised}" max="${maxRaised}"/>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <select id="dateFilter" class="filter-select">
+                            ${(this.filterOptions.date_ranges || []).map(opt => `<option value="${opt}">${opt}</option>`).join('')}
+                        </select>
+                     </div>
+                 </div>
+            </div>
+            <div class="table-wrapper">
+                <div class="table-controls">
+                    <span class="filtered-text">Filtered Projects</span>
+                    <input type="text" id="table-search" class="search-input" placeholder="Search table...">
+                </div>
+                <div class="table-container">
+                    <table id="data-table">
+                        <thead>
+                            <tr>${headerHtml}</tr>
+                        </thead>
+                        <tbody id="table-body">
+                            <!-- Rows will be inserted here -->
+                        </tbody>
+                    </table>
+                    <div id="loading-indicator" class="loading-overlay hidden">Loading...</div>
+                </div>
+                <div class="pagination-controls">
+                    <button id="prev-page" class="page-btn" aria-label="Previous page">&lt;</button>
+                    <div id="page-numbers" class="page-numbers"></div>
+                    <button id="next-page" class="page-btn" aria-label="Next page">&gt;</button>
+                </div>
+            </div>
+        `;
     }
 
-    function updateTableRows(rows, currentPage, pageSize) {
-        const start = (currentPage - 1) * pageSize;
-        const end = start + pageSize;
-        
-        rows.forEach((row, index) => {
-            row.style.display = (index >= start && index < end) ? '' : 'none';
+    bindStaticElements() {
+        // --- Search ---
+        this.searchInput = document.getElementById('table-search');
+        this.searchInput.addEventListener('input', debounce((e) => {
+            this.currentFilters.search = e.target.value.trim();
+            this.currentPage = 1; // Reset to first page on new search
+            this.requestUpdate();
+        }, 500)); // Debounce search input
+
+        // --- Pagination ---
+        document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
+        document.getElementById('next-page').addEventListener('click', () => this.nextPage());
+        // Page number clicks are handled dynamically in updatePagination
+
+        // --- Reset ---
+        document.getElementById('resetFilters').addEventListener('click', () => this.resetFilters());
+
+        // --- Sort ---
+        document.getElementById('sortFilter').addEventListener('change', (e) => {
+            this.currentSort = e.target.value;
+            this.currentPage = 1; // Reset to first page on sort change
+            this.requestUpdate();
         });
+        
+        // --- Date Filter ---
+        document.getElementById('dateFilter').addEventListener('change', (e) => {
+             this.currentFilters.date = e.target.value;
+             this.currentPage = 1;
+             this.requestUpdate();
+        });
+
+        // --- Range Sliders ---
+        this.setupRangeSlider(); // Sets up listeners for sliders/inputs
+
+        // --- Multi-Select Dropdowns ---
+        this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
+        this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
+        this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
+        this.selectedStates = new Set(this.currentFilters.states || ['All States']);
+
+        this.categoryBtn = document.getElementById('categoryFilterBtn');
+        this.subcategoryBtn = document.getElementById('subcategoryFilterBtn');
+        this.countryBtn = document.getElementById('countryFilterBtn');
+        this.stateBtn = document.getElementById('stateFilterBtn');
+
+        this.setupMultiSelect(
+            document.querySelectorAll('#categoryOptionsContainer .category-option'),
+            this.selectedCategories,
+            'All Categories',
+            this.categoryBtn,
+            true // Trigger subcategory update
+        );
+        this.updateSubcategoryOptions(); // Initial population
+        this.setupMultiSelect( // Setup for subcategories *after* initial population
+             document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'),
+             this.selectedSubcategories,
+             'All Subcategories',
+             this.subcategoryBtn
+        );
+        this.setupMultiSelect(
+            document.querySelectorAll('#countryOptionsContainer .country-option'),
+            this.selectedCountries,
+            'All Countries',
+            this.countryBtn
+        );
+         this.setupMultiSelect(
+             document.querySelectorAll('#stateOptionsContainer .state-option'),
+             this.selectedStates,
+             'All States',
+             this.stateBtn
+         );
     }
 
-    class TableManager {
-        constructor() {
-            this.searchInput = document.getElementById('table-search');
-            this.allRows = Array.from(document.querySelectorAll('#data-table tbody tr'));
-            this.visibleRows = this.allRows;
-            this.currentPage = 1;
-            this.pageSize = 10;
-            this.currentSearchTerm = '';
-            this.currentFilters = {
-                categories: ['All Categories'],
-                subcategories: ['All Subcategories'],
-                countries: ['All Countries'],
-                states: ['All States'],
-                date: 'All Time',
-                ranges: {
-                    pledged: { min: parseFloat(document.getElementById('fromInput').min), max: parseFloat(document.getElementById('fromInput').max) },
-                    goal: { min: parseFloat(document.getElementById('goalFromInput').min), max: parseFloat(document.getElementById('goalFromInput').max) },
-                    raised: { min: parseFloat(document.getElementById('raisedFromInput').min), max: parseFloat(document.getElementById('raisedFromInput').max) }
-                }
-            };
-            this.currentSort = 'popularity';
-            this.initialize();
-        }
+    updateUIState(data) {
+        // Update filter controls to reflect the current state received from Python
+        this.currentPage = data.current_page;
+        this.totalRows = data.total_rows;
+        this.currentFilters = data.filters;
+        this.currentSort = data.sort_order;
 
-        async sortRows(sortType) {
-            if (sortType === 'popularity') {
-                this.visibleRows.sort((a, b) => {
-                    const scoreA = parseFloat(a.dataset.popularity);
-                    const scoreB = parseFloat(b.dataset.popularity);
-                    
-                    if (isNaN(scoreA)) return 1;
-                    if (isNaN(scoreB)) return -1;
-                    
-                    return scoreB - scoreA;
-                });
-            } else if (sortType === 'enddate') {
-                this.visibleRows.sort((a, b) => {
-                    const deadlineA = new Date(a.dataset.deadline);
-                    const deadlineB = new Date(b.dataset.deadline);
-                    return deadlineB - deadlineA; 
-                });
-            } else if (sortType === 'mostfunded') {
-                this.visibleRows.sort((a, b) => {
-                    const pledgedA = parseFloat(a.dataset.pledged);
-                    const pledgedB = parseFloat(b.dataset.pledged);
-                    return pledgedB - pledgedA; 
-                });
-            } else if (sortType === 'mostbacked') {
-                this.visibleRows.sort((a, b) => {
-                    const backersA = parseInt(a.dataset.backers);
-                    const backersB = parseInt(b.dataset.backers);
-                    return backersB - backersA; 
-                });
-            } else {
-                this.visibleRows.sort((a, b) => {
-                    const dateA = new Date(a.dataset.date);
-                    const dateB = new Date(b.dataset.date);
-                    return sortType === 'newest' ? dateB - dateA : dateA - dateB;
-                });
-            }
+        // -- Update Search Input --
+        if (this.searchInput) this.searchInput.value = this.currentFilters.search || '';
 
-            const tbody = document.querySelector('#data-table tbody');
-            this.visibleRows.forEach(row => row.parentNode && row.parentNode.removeChild(row));
-            this.visibleRows.forEach(row => tbody.appendChild(row));
-            
-            this.currentPage = 1;
-            this.updateTable();
-        }
+        // -- Update Sort Dropdown --
+        const sortSelect = document.getElementById('sortFilter');
+        if (sortSelect) sortSelect.value = this.currentSort;
+        
+         // -- Update Date Dropdown --
+         const dateSelect = document.getElementById('dateFilter');
+         if (dateSelect) dateSelect.value = this.currentFilters.date || 'All Time';
 
-        async applyAllFilters() {
-            let filteredRows = this.allRows;
+        // -- Update Multi-Selects --
+        this.selectedCategories = new Set(this.currentFilters.categories || ['All Categories']);
+        this.selectedSubcategories = new Set(this.currentFilters.subcategories || ['All Subcategories']);
+        this.selectedCountries = new Set(this.currentFilters.countries || ['All Countries']);
+        this.selectedStates = new Set(this.currentFilters.states || ['All States']);
 
-            if (this.currentSearchTerm) {
-                const pattern = createRegexPattern(this.currentSearchTerm);
-                filteredRows = filteredRows.filter(row => {
-                    const text = row.textContent || row.innerText;
-                    return pattern.test(text);
-                });
-            }
+        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+        this.updateSubcategoryOptions(); // Re-render subcategories based on selected categories
+        this.updateMultiSelectUI(document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'), this.selectedSubcategories, this.subcategoryBtn, 'All Subcategories');
+        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
+        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
 
-            if (this.currentFilters) {
-                filteredRows = filteredRows.filter(row => {
-                    return this.matchesFilters(row, this.currentFilters);
-                });
-            }
+        // -- Update Range Sliders --
+        if (this.currentFilters.ranges && this.rangeSliderElements) {
+             const { ranges } = this.currentFilters;
+             const {
+                 fromSlider, toSlider, fromInput, toInput,
+                 goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+                 raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+                 fillSlider // Function to update slider background
+             } = this.rangeSliderElements;
 
-            this.visibleRows = filteredRows;
-
-            await this.sortRows(this.currentSort);
-
-            this.currentPage = 1;
-            this.updateTable();
-        }
-
-        async applyFilters() {
-            const selectedCategories = Array.from(document.querySelectorAll('.category-option.selected'))
-                .map(option => option.dataset.value);
-
-            const selectedCountries = Array.from(document.querySelectorAll('.country-option.selected'))
-                .map(option => option.dataset.value);
-
-            const selectedStates = Array.from(document.querySelectorAll('.state-option.selected'))
-                .map(option => option.dataset.value);
-
-            const selectedSubcategories = Array.from(document.querySelectorAll('.subcategory-option.selected'))
-                .map(option => option.dataset.value);
-
-            this.currentFilters = {
-                categories: selectedCategories,
-                subcategories: selectedSubcategories,
-                countries: selectedCountries,
-                states: selectedStates,
-                date: document.getElementById('dateFilter').value
-            };
-
-            const sortSelect = document.getElementById('sortFilter');
-            this.currentSort = sortSelect ? sortSelect.value : 'popularity';
-
-            const rangeFilters = {
-                 pledged: {
-                      min: parseFloat(document.getElementById('fromInput').value),
-                      max: parseFloat(document.getElementById('toInput').value)
-                 },
-                 goal: {
-                      min: parseFloat(document.getElementById('goalFromInput').value),
-                      max: parseFloat(document.getElementById('goalToInput').value)
-                 },
-                 raised: {
-                      min: parseFloat(document.getElementById('raisedFromInput').value),
-                      max: parseFloat(document.getElementById('raisedToInput').value)
-                 }
-            };
-            this.currentFilters.ranges = rangeFilters;
-
-            await this.applyAllFilters();
-        }
-
-        initialize() {
-            this.setupSearchAndPagination();
-            this.setupFilters(); 
-            this.setupRangeSlider();
-            this.currentSort = 'popularity'; 
-
-            this.applyAllFilters(); 
-            this.updateTable();
-            this.updateSubcategoryOptions(); 
-        }
-
-        setupSearchAndPagination() {
-            const debouncedSearch = debounce((searchTerm) => {
-                this.currentSearchTerm = searchTerm;
-                this.applyAllFilters();
-            }, 300);
-
-            this.searchInput.addEventListener('input', (e) => {
-                debouncedSearch(e.target.value.trim().toLowerCase());
-            });
-
-            document.getElementById('prev-page').addEventListener('click', () => this.previousPage());
-            document.getElementById('next-page').addEventListener('click', () => this.nextPage());
-            window.handlePageClick = (page) => this.goToPage(page);
-        }
-
-        matchesFilters(row, filters) {
-            const category = row.dataset.category;
-            if (!filters.categories.includes('All Categories') && !filters.categories.includes(category)) {
-                return false;
-            }
-
-            const subcategory = row.dataset.subcategory;
-            if (!filters.subcategories.includes('All Subcategories') && !filters.subcategories.includes(subcategory)) {
-                return false;
-            }
-
-            const country = row.querySelector('td:nth-child(5)').textContent.trim();
-            if (!filters.countries.includes('All Countries') && !filters.countries.includes(country)) {
-                return false;
-            }
-
-            const stateCell = row.querySelector('.state_cell');
-            let state = 'unknown';
-            if (stateCell) {
-                const classList = stateCell.className.split(' ');
-                const stateClass = classList.find(cls => cls.startsWith('state-'));
-                if (stateClass) {
-                    state = stateClass.substring(6).toLowerCase();
-                }
-            }
-            if (!filters.states.includes('All States')) {
-                const stateMatches = filters.states.some(filterState => filterState.toLowerCase() === state);
-                if (!stateMatches) {
-                     return false;
-                }
-            }
-
-            const pledged = parseFloat(row.dataset.pledged);
-            const goal = parseFloat(row.dataset.goal);
-            const raised = parseFloat(row.dataset.raised);
-            const date = new Date(row.dataset.date);
-
-            const minPledged = filters.ranges.pledged.min;
-            const maxPledged = filters.ranges.pledged.max;
-            if (isNaN(pledged) || pledged < minPledged || pledged > maxPledged) return false;
-
-            const minGoal = filters.ranges.goal.min;
-            const maxGoal = filters.ranges.goal.max;
-            if (isNaN(goal) || goal < minGoal || goal > maxGoal) return false;
-
-            const minRaised = filters.ranges.raised.min;
-            const maxRaised = filters.ranges.raised.max;
-            if (isNaN(raised)) return false;
-            if (raised === 0.0 && minRaised > 0) return false;
-            if (raised < minRaised || raised > maxRaised) return false;
-
-            if (filters.date !== 'All Time') {
-                const now = new Date();
-                let compareDate = new Date();
-                
-                switch(filters.date) {
-                    case 'Last Month': compareDate.setMonth(now.getMonth() - 1); break;
-                    case 'Last 6 Months': compareDate.setMonth(now.getMonth() - 6); break;
-                    case 'Last Year': compareDate.setFullYear(now.getFullYear() - 1); break;
-                    case 'Last 5 Years': compareDate.setFullYear(now.getFullYear() - 5); break;
-                    case 'Last 10 Years': compareDate.setFullYear(now.getFullYear() - 10); break;
-                }
-                
-                if (date < compareDate) return false;
-            }
-
-            return true;
-        }
-
-        resetFilters() {
-            const categoryOptions = document.querySelectorAll('.category-option');
-            categoryOptions.forEach(opt => opt.classList.remove('selected'));
-            const allCategoriesOption = document.querySelector('.category-option[data-value="All Categories"]');
-            allCategoriesOption.classList.add('selected');
-            const categoryBtn = document.querySelector('.multi-select-btn');
-            categoryBtn.textContent = 'All Categories';
-
-            const countryOptions = document.querySelectorAll('.country-option');
-            countryOptions.forEach(opt => opt.classList.remove('selected'));
-            const allCountriesOption = document.querySelector('.country-option[data-value="All Countries"]');
-            allCountriesOption.classList.add('selected');
-            const countryBtn = countryOptions[0].closest('.multi-select-dropdown').querySelector('.multi-select-btn');
-            countryBtn.textContent = 'All Countries';
-
-            const stateOptions = document.querySelectorAll('.state-option');
-            stateOptions.forEach(opt => opt.classList.remove('selected'));
-            const allStatesOption = document.querySelector('.state-option[data-value="All States"]');
-            allStatesOption.classList.add('selected');
-            const stateBtn = stateOptions[0].closest('.multi-select-dropdown').querySelector('.multi-select-btn');
-            stateBtn.textContent = 'All States';
-
-            const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
-            subcategoryOptionsContainer.innerHTML = ''; 
-            const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-            if (window.selectedSubcategories) window.selectedSubcategories.clear();
-            if (window.selectedSubcategories) window.selectedSubcategories.add('All Subcategories');
-            this.updateSubcategoryOptions(); 
-
-            if (window.selectedCategories) window.selectedCategories.clear();
-            if (window.selectedCountries) window.selectedCountries.clear();
-            if (window.selectedStates) window.selectedStates.clear();
-
-            if (window.selectedCategories) window.selectedCategories.add('All Categories');
-            if (window.selectedCountries) window.selectedCountries.add('All Countries');
-            if (window.selectedStates) window.selectedStates.add('All States');
-
-            if (this.rangeSliderElements) {
-                const {
-                    fromSlider, toSlider, fromInput, toInput,
-                    goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                    raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                    fillSlider
-                } = this.rangeSliderElements;
-
-                 const minPledgedVal = fromSlider.min;
-                 const maxPledgedVal = toSlider.max;
-                 const minGoalVal = goalFromSlider.min;
-                 const maxGoalVal = goalToSlider.max;
-                 const minRaisedVal = raisedFromSlider.min;
-                 const maxRaisedVal = raisedToSlider.max;
-
-                 fromSlider.value = minPledgedVal;
-                 toSlider.value = maxPledgedVal;
-                 fromInput.value = minPledgedVal;
-                 toInput.value = maxPledgedVal;
+             // Pledged
+             if (ranges.pledged) {
+                 fromSlider.value = ranges.pledged.min;
+                 toSlider.value = ranges.pledged.max;
+                 fromInput.value = ranges.pledged.min;
+                 toInput.value = ranges.pledged.max;
                  fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-
-                 goalFromSlider.value = minGoalVal;
-                 goalToSlider.value = maxGoalVal;
-                 goalFromInput.value = minGoalVal;
-                 goalToInput.value = maxGoalVal;
+             }
+             // Goal
+             if (ranges.goal) {
+                 goalFromSlider.value = ranges.goal.min;
+                 goalToSlider.value = ranges.goal.max;
+                 goalFromInput.value = ranges.goal.min;
+                 goalToInput.value = ranges.goal.max;
                  fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-
-                 raisedFromSlider.value = minRaisedVal;
-                 raisedToSlider.value = maxRaisedVal;
-                 raisedFromInput.value = minRaisedVal;
-                 raisedToInput.value = maxRaisedVal;
-                 fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
-            }
-
-            const dateFilterSelect = document.getElementById('dateFilter');
-            if (dateFilterSelect) {
-                dateFilterSelect.value = 'All Time'; 
-            }
-            this.searchInput.value = '';
-            this.currentSearchTerm = '';
-            this.currentFilters = {
-                categories: Array.from(window.selectedCategories),
-                subcategories: Array.from(window.selectedSubcategories),
-                countries: Array.from(window.selectedCountries),
-                states: Array.from(window.selectedStates),
-                date: document.getElementById('dateFilter') ? document.getElementById('dateFilter').value : 'All Time',
-                ranges: {
-                    pledged: { min: parseFloat(fromInput.value), max: parseFloat(toInput.value) },
-                    goal: { min: parseFloat(goalFromInput.value), max: parseFloat(goalToInput.value) },
-                    raised: { min: parseFloat(raisedFromInput.value), max: parseFloat(raisedToInput.value) }
-                }
-            };
-            this.currentSort = 'popularity';
-            document.getElementById('sortFilter').value = 'popularity';
-            this.visibleRows = this.allRows;
-            this.applyAllFilters(); 
-        }
-
-        updateTable() {
-            this.allRows.forEach(row => row.style.display = 'none');
-            
-            const start = (this.currentPage - 1) * this.pageSize;
-            const end = Math.min(start + this.pageSize, this.visibleRows.length);
-            
-            this.visibleRows.slice(start, end).forEach(row => {
-                row.style.display = '';
-            });
-
-            this.updatePagination();
-            this.adjustHeight();
-        }
-
-        updatePagination() {
-            const totalPages = Math.max(1, Math.ceil(this.visibleRows.length / this.pageSize));
-            const pageNumbers = this.generatePageNumbers(totalPages);
-            const container = document.getElementById('page-numbers');
-            
-            container.innerHTML = pageNumbers.map(page => {
-                if (page === '...') {
-                    return '<span class="page-ellipsis">...</span>';
-                }
-                return `<button class="page-number ${page === this.currentPage ? 'active' : ''}"
-                    ${page === this.currentPage ? 'disabled' : ''} 
-                    onclick="handlePageClick(${page})">${page}</button>`;
-            }).join('');
-
-            document.getElementById('prev-page').disabled = this.currentPage <= 1;
-            document.getElementById('next-page').disabled = this.currentPage >= totalPages;
-        }
-
-        generatePageNumbers(totalPages) {
-            let pages = [];
-            if (totalPages <= 10) {
-                pages = Array.from({length: totalPages}, (_, i) => i + 1);
-            } else {
-                if (this.currentPage <= 7) {
-                    pages = [...Array.from({length: 7}, (_, i) => i + 1), '...', totalPages - 1, totalPages];
-                } else if (this.currentPage >= totalPages - 6) {
-                    pages = [1, 2, '...', ...Array.from({length: 7}, (_, i) => totalPages - 6 + i)];
-                } else {
-                    pages = [1, 2, '...', this.currentPage - 1, this.currentPage, this.currentPage + 1, '...', totalPages - 1, totalPages];
-                }
-            }
-            return pages;
-        }
-
-        previousPage() {
-            if (this.currentPage > 1) {
-                this.currentPage--;
-                this.updateTable();
-            }
-        }
-
-        nextPage() {
-            const totalPages = Math.ceil(this.visibleRows.length / this.pageSize);
-            if (this.currentPage < totalPages) {
-                this.currentPage++;
-                this.updateTable();
-            }
-        }
-
-        goToPage(page) {
-            const totalPages = Math.ceil(this.visibleRows.length / this.pageSize);
-            if (page >= 1 && page <= totalPages) {
-                this.currentPage = page;
-                this.updateTable();
-            }
-        }
-
-        adjustHeight() {
-            requestAnimationFrame(() => {
-                const elements = {
-                    titleWrapper: document.querySelector('.title-wrapper'),
-                    filterWrapper: document.querySelector('.filter-wrapper'),
-                    tableWrapper: document.querySelector('.table-wrapper'),
-                    tableContainer: document.querySelector('.table-container'),
-                    table: document.querySelector('#data-table'),
-                    controls: document.querySelector('.table-controls'),
-                    pagination: document.querySelector('.pagination-controls')
-                };
-
-                if (!Object.values(elements).every(el => el)) return;
-
-                const visibleRowCount = this.visibleRows.slice(
-                    (this.currentPage - 1) * this.pageSize,
-                    this.currentPage * this.pageSize
-                ).length;
-
-                const rowHeight = 52;        
-                const headerHeight = 60;     
-                const controlsHeight = elements.controls.offsetHeight;
-                const paginationHeight = elements.pagination.offsetHeight;
-                const padding = 40;
-                const minTableHeight = 400;  
-
-                const tableContentHeight = (visibleRowCount * rowHeight) + headerHeight;
-                const actualTableHeight = Math.max(tableContentHeight, minTableHeight);
-
-                elements.tableContainer.style.height = `${actualTableHeight}px`;
-                elements.tableWrapper.style.height = `${actualTableHeight + controlsHeight + paginationHeight}px`;
-
-                const finalHeight = 
-                    elements.titleWrapper.offsetHeight +
-                    elements.filterWrapper.offsetHeight +
-                    actualTableHeight +
-                    controlsHeight +
-                    paginationHeight +
-                    padding;
-
-                if (!this.lastHeight || Math.abs(this.lastHeight - finalHeight) > 10) {
-                    this.lastHeight = finalHeight;
-                    Streamlit.setFrameHeight(finalHeight);
-                }
-            });
-        }
-
-        setupFilters() {
-            window.selectedCategories = new Set(['All Categories']);
-            window.selectedCountries = new Set(['All Countries']);
-            window.selectedStates = new Set(['All States']);
-            window.selectedSubcategories = new Set(['All Subcategories']); 
-
-            const categoryBtn = document.getElementById('categoryFilterBtn');
-            const countryBtn = document.getElementById('countryFilterBtn');
-            const stateBtn = document.getElementById('stateFilterBtn');
-            const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-
-            this.updateButtonText = (selectedItems, buttonElement, allValueLabel) => {
-                 if (!buttonElement) return;
-
-                 const selectedArray = Array.from(selectedItems);
-                 if (selectedArray.length === 1 && selectedArray[0] === allValueLabel) {
-                     buttonElement.textContent = allValueLabel;
-                 } else if (selectedArray.length === 0 ) { 
-                     buttonElement.textContent = allValueLabel; 
-                 }
-                 else {
-                     const displayItems = selectedArray.filter(item => item !== allValueLabel);
-                     const sortedArray = displayItems.sort((a, b) => a.localeCompare(b));
-
-                     if (sortedArray.length === 0) { 
-                          buttonElement.textContent = allValueLabel;
-                     } else if (sortedArray.length > 2) {
-                          buttonElement.textContent = `${sortedArray[0]}, ${sortedArray[1]} +${sortedArray.length - 2}`;
-                     } else {
-                          buttonElement.textContent = sortedArray.join(', ');
-                     }
-                 }
-            };
-
-            this.setupMultiSelect = (options, selectedSet, allValue, buttonElement, triggerSubcategoryUpdate = false) => {
-                const allOption = Array.from(options).find(opt => opt.dataset.value === allValue); 
-
-                options.forEach(option => {
-                    option.replaceWith(option.cloneNode(true)); 
-                });
-
-                 const freshOptions = buttonElement.nextElementSibling.querySelectorAll('[data-value]');
-                 const freshAllOption = Array.from(freshOptions).find(opt => opt.dataset.value === allValue);
-
-                freshOptions.forEach(option => {
-                     if (selectedSet.has(option.dataset.value)) {
-                         option.classList.add('selected');
-                     }
-
-                     option.addEventListener('click', (e) => {
-                        const clickedValue = e.target.dataset.value;
-                        const isCurrentlySelected = e.target.classList.contains('selected');
-
-                        if (clickedValue === allValue) {
-                            selectedSet.clear();
-                            selectedSet.add(allValue);
-                            freshOptions.forEach(opt => opt.classList.remove('selected'));
-                            if(freshAllOption) freshAllOption.classList.add('selected');
-                        } else {
-                            selectedSet.delete(allValue); 
-                            if(freshAllOption) freshAllOption.classList.remove('selected');
-
-                            e.target.classList.toggle('selected'); 
-                            if (e.target.classList.contains('selected')) {
-                                selectedSet.add(clickedValue); 
-                            } else {
-                                selectedSet.delete(clickedValue); 
-                            }
-
-                            if (selectedSet.size === 0) {
-                                selectedSet.add(allValue);
-                                if(freshAllOption) freshAllOption.classList.add('selected');
-                            }
-                        }
-
-                        this.updateButtonText(selectedSet, buttonElement, allValue);
-
-                        if (triggerSubcategoryUpdate) {
-                            this.updateSubcategoryOptions(); 
-                        }
-
-                        this.applyFilters(); 
-                    });
-                });
-
-                this.updateButtonText(selectedSet, buttonElement, allValue);
-            };
-
-            this.setupMultiSelect(
-                document.querySelectorAll('.category-option'),
-                window.selectedCategories,
-                'All Categories',
-                categoryBtn,
-                true 
-            );
-
-            this.setupMultiSelect(
-                document.querySelectorAll('.country-option'),
-                window.selectedCountries,
-                'All Countries',
-                countryBtn
-            );
-
-            this.setupMultiSelect(
-                document.querySelectorAll('.state-option'),
-                window.selectedStates,
-                'All States',
-                stateBtn
-            );
-
-             this.setupMultiSelect(
-                 document.querySelectorAll('.subcategory-option'),
-                 window.selectedSubcategories,
-                 'All Subcategories',
-                 subcategoryBtn
-             );
-
-            const filterIds = ['dateFilter', 'sortFilter'];
-            filterIds.forEach(id => {
-                const element = document.getElementById(id);
-                if (element) {
-                    element.addEventListener('change', () => this.applyFilters());
-                }
-            });
-
-            const resetButton = document.getElementById('resetFilters');
-            if (resetButton) {
-                resetButton.addEventListener('click', () => this.resetFilters());
-            }
-
-        }
-
-        setupRangeSlider() {
-            const fromSlider = document.getElementById('fromSlider');
-            const toSlider = document.getElementById('toSlider');
-            const fromInput = document.getElementById('fromInput');
-            const toInput = document.getElementById('toInput');
-
-            const goalFromSlider = document.getElementById('goalFromSlider');
-            const goalToSlider = document.getElementById('goalToSlider');
-            const goalFromInput = document.getElementById('goalFromInput');
-            const goalToInput = document.getElementById('goalToInput');
-
-            const raisedFromSlider = document.getElementById('raisedFromSlider');
-            const raisedToSlider = document.getElementById('raisedToSlider');
-            const raisedFromInput = document.getElementById('raisedFromInput');
-            const raisedToInput = document.getElementById('raisedToInput');
-
-            let inputTimeout;
-
-            const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => {
-                const rangeDistance = controlSlider.max - controlSlider.min;
-                const fromPosition = from.value - controlSlider.min;
-                const toPosition = to.value - controlSlider.min;
-                controlSlider.style.background = `linear-gradient(
-                    to right,
-                    ${sliderColor} 0%,
-                    ${sliderColor} ${(fromPosition)/(rangeDistance)*100}%,
-                    ${rangeColor} ${((fromPosition)/(rangeDistance))*100}%,
-                    ${rangeColor} ${(toPosition)/(rangeDistance)*100}%, 
-                    ${sliderColor} ${(toPosition)/(rangeDistance)*100}%, 
-                    ${sliderColor} 100%)`;
-            }
-
-            const debouncedApplyFilters = debounce(() => this.applyFilters(), 100);
-
-            const controlFromSlider = (fromSlider, toSlider, fromInput) => {
-                const [from, to] = getParsedValue(fromSlider, toSlider);
-                const currentFromInputValue = fromInput ? parseInt(fromInput.value) : from; 
-                fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-                if (from > to) {
-                    fromSlider.value = to;
-                    if (fromInput) fromInput.value = to; 
-                } else {
-                     if (fromInput) fromInput.value = from; 
-                }
-            };
-            
-            const controlToSlider = (fromSlider, toSlider, toInput) => {
-                const [from, to] = getParsedValue(fromSlider, toSlider);
-                const currentToInputValue = toInput ? parseInt(toInput.value) : to; 
-                fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-                if (from <= to) {
-                    if (toInput) toInput.value = to; 
-                } else {
-                    if (toInput) toInput.value = from; 
-                    toSlider.value = from; 
-                }
-            };
-
-            const getParsedValue = (fromSlider, toSlider) => {
-                const from = fromSlider ? parseInt(fromSlider.value) : 0;
-                const to = toSlider ? parseInt(toSlider.value) : 0;
-                return [from, to];
-            };
-
-            const validateAndUpdateRange = (input, isMin = true, immediate = false) => {
-                 const updateValues = () => {
-                     if (!input) {
-                         console.error("validateAndUpdateRange called with null input");
-                         return;
-                     }
-            
-                     let value = parseInt(input.value);
-                     const minAllowed = parseInt(input.min);
-                     const maxAllowed = parseInt(input.max);
-            
-                     let relevantFromSlider, relevantToSlider, relevantFromInput, relevantToInput;
-                     if (input.id.startsWith('goal')) {
-                         relevantFromSlider = goalFromSlider;
-                         relevantToSlider = goalToSlider;
-                         relevantFromInput = goalFromInput;
-                         relevantToInput = goalToInput;
-                     } else if (input.id.startsWith('raised')) {
-                         relevantFromSlider = raisedFromSlider;
-                         relevantToSlider = raisedToSlider;
-                         relevantFromInput = raisedFromInput;
-                         relevantToInput = raisedToInput;
-                     } else { 
-                         relevantFromSlider = fromSlider;
-                         relevantToSlider = toSlider;
-                         relevantFromInput = fromInput;
-                         relevantToInput = toInput;
-                     }
-            
-                     if (!relevantFromSlider || !relevantToSlider) {
-                         console.error("validateAndUpdateRange could not find relevant sliders for input:", input.id);
-                         return;
-                     }
-
-                     if (isNaN(value)) {
-                         value = isMin ? minAllowed : maxAllowed;
-                     }
-            
-                     if (isMin) {
-                         const maxValue = parseInt(relevantToSlider.value);
-                         value = Math.max(minAllowed, Math.min(maxValue, value));
-                         relevantFromSlider.value = value;
-                         input.value = value; 
-                         controlFromSlider(relevantFromSlider, relevantToSlider, relevantFromInput); 
-                     } else {
-                         const minValue = parseInt(relevantFromSlider.value);
-                         value = Math.max(minValue, Math.min(maxAllowed, value));
-                         relevantToSlider.value = value;
-                         input.value = value; 
-                         controlToSlider(relevantFromSlider, relevantToSlider, relevantToInput); 
-                     }
-            
-                     debouncedApplyFilters();
-                 };
-            
-                 if (immediate) {
-                     clearTimeout(inputTimeout);
-                     updateValues();
-                 } else {
-                     clearTimeout(inputTimeout);
-                     inputTimeout = setTimeout(updateValues, 500); 
-                 }
-            };
-
-            fromSlider.addEventListener('input', (e) => {
-                controlFromSlider(fromSlider, toSlider, fromInput);
-                debouncedApplyFilters();
-            });
-
-            toSlider.addEventListener('input', (e) => {
-                controlToSlider(fromSlider, toSlider, toInput);
-                debouncedApplyFilters();
-            });
-
-            goalFromSlider.addEventListener('input', (e) => {
-                controlFromSlider(goalFromSlider, goalToSlider, goalFromInput);
-                debouncedApplyFilters();
-            });
-
-            goalToSlider.addEventListener('input', (e) => {
-                controlToSlider(goalFromSlider, goalToSlider, goalToInput);
-                debouncedApplyFilters();
-            });
-
-            raisedFromSlider.addEventListener('input', (e) => {
-                controlFromSlider(raisedFromSlider, raisedToSlider, raisedFromInput);
-                debouncedApplyFilters();
-            });
-
-            raisedToSlider.addEventListener('input', (e) => {
-                controlToSlider(raisedFromSlider, raisedToSlider, raisedToInput);
-                debouncedApplyFilters();
-            });
-
-            [fromInput, goalFromInput, raisedFromInput].forEach(input => {
-                input.addEventListener('input', () => {
-                    validateAndUpdateRange(input, true, false);
-                });
-            });
-
-            [toInput, goalToInput, raisedToInput].forEach(input => {
-                input.addEventListener('input', () => {
-                    validateAndUpdateRange(input, false, false);
-                });
-            });
-
-            fromInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(fromInput, true, true);
-                }
-            });
-
-            toInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(toInput, false, true);
-                }
-            });
-
-            goalFromInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(goalFromInput, true, true);
-                }
-            });
-
-            goalToInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(goalToInput, false, true);
-                }
-            });
-
-            raisedFromInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(raisedFromInput, true, true);
-                }
-            });
-
-            raisedToInput.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    validateAndUpdateRange(raisedToInput, false, true);
-                }
-            });
-
-            fromInput.addEventListener('blur', () => {
-                validateAndUpdateRange(fromInput, true, true);
-            });
-
-            toInput.addEventListener('blur', () => {
-                validateAndUpdateRange(toInput, false, true);
-            });
-
-            goalFromInput.addEventListener('blur', () => {
-                validateAndUpdateRange(goalFromInput, true, true);
-            });
-
-            goalToInput.addEventListener('blur', () => {
-                validateAndUpdateRange(goalToInput, false, true);
-            });
-
-            raisedFromInput.addEventListener('blur', () => {
-                validateAndUpdateRange(raisedFromInput, true, true);
-            });
-
-            raisedToInput.addEventListener('blur', () => {
-                validateAndUpdateRange(raisedToInput, false, true);
-            });
-
-            this.rangeSliderElements = {
-                fromSlider, toSlider, fromInput, toInput,
-                goalFromSlider, goalToSlider, goalFromInput, goalToInput,
-                raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
-                fillSlider
-            };
-
-            fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
-            fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
-            fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
-        }
-
-        updateSubcategoryOptions() {
-            const selectedCategories = window.selectedCategories || new Set(['All Categories']);
-            const subcategoryMap = window.categorySubcategoryMap || {};
-            const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
-            const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
-
-            let availableSubcategories = new Set();
-            let isAllCategoriesSelected = selectedCategories.has('All Categories');
-
-            if (isAllCategoriesSelected || selectedCategories.size === 0) {
-                 (subcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
-            } else {
-                 availableSubcategories.add('All Subcategories'); 
-                 selectedCategories.forEach(cat => {
-                     (subcategoryMap[cat] || []).forEach(subcat => {
-                         if (subcat !== 'All Subcategories') { 
-                            availableSubcategories.add(subcat);
-                         }
-                     });
-                 });
-            }
-
-            const sortedSubcategories = Array.from(availableSubcategories);
-            sortedSubcategories.sort((a, b) => {
-                if (a === 'All Subcategories') return -1;
-                if (b === 'All Subcategories') return 1;
-                return a.localeCompare(b);
-            });
-
-            subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
-                `<div class="subcategory-option" data-value="${opt}">${opt}</div>`
-            ).join('');
-
-            window.selectedSubcategories = new Set(['All Subcategories']);
-            const allSubcatOption = subcategoryOptionsContainer.querySelector('.subcategory-option[data-value="All Subcategories"]');
-            if (allSubcatOption) {
-                allSubcatOption.classList.add('selected');
-            }
-             this.updateButtonText(window.selectedSubcategories, subcategoryBtn, 'All Subcategories'); 
-
-
-            this.setupMultiSelect(
-                subcategoryOptionsContainer.querySelectorAll('.subcategory-option'),
-                window.selectedSubcategories,
-                'All Subcategories',
-                subcategoryBtn,
-                false 
-            );
-        }
-    }
-
-    function onRender(event) {
-        if (!window.rendered) {
-            window.tableManager = new TableManager();
-            window.rendered = true;
-
-            const resizeObserver = new ResizeObserver(() => {
-                if (window.tableManager) {
-                    clearTimeout(window.resizeTimeout);
-                    window.resizeTimeout = setTimeout(() => {
-                         window.tableManager.adjustHeight();
-                    }, 50);
-                }
-            });
-            const tableWrapper = document.querySelector('.table-wrapper');
-            if (tableWrapper) {
-                 resizeObserver.observe(tableWrapper);
-            } else {
-                 console.error("Table wrapper not found for ResizeObserver.");
-            }
-        } else {
-             if (window.tableManager) {
-                  window.tableManager.adjustHeight();
+             }
+             // Raised
+             if (ranges.raised) {
+                  raisedFromSlider.value = ranges.raised.min;
+                  raisedToSlider.value = ranges.raised.max;
+                  raisedFromInput.value = ranges.raised.min;
+                  raisedToInput.value = ranges.raised.max;
+                  fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
              }
         }
     }
-    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-    Streamlit.setComponentReady();
+
+    updateMultiSelectUI(options, selectedSet, buttonElement, allValue) {
+         if (!options || options.length === 0) return; // Handle case where options not rendered yet
+         options.forEach(option => {
+            if (selectedSet.has(option.dataset.value)) {
+                 option.classList.add('selected');
+            }
+         });
+         this.updateButtonText(selectedSet, buttonElement, allValue);
+    }
+
+
+    requestUpdate() {
+        // Show loading indicator
+        this.showLoading(true);
+
+        // Gather the current state from UI elements
+        const state = {
+            page: this.currentPage,
+            filters: {
+                search: this.searchInput.value.trim(),
+                categories: Array.from(this.selectedCategories),
+                subcategories: Array.from(this.selectedSubcategories),
+                countries: Array.from(this.selectedCountries),
+                states: Array.from(this.selectedStates),
+                date: document.getElementById('dateFilter').value,
+                ranges: {
+                    pledged: { min: parseFloat(document.getElementById('fromInput').value), max: parseFloat(document.getElementById('toInput').value) },
+                    goal: { min: parseFloat(document.getElementById('goalFromInput').value), max: parseFloat(document.getElementById('goalToInput').value) },
+                    raised: { min: parseFloat(document.getElementById('raisedFromInput').value), max: parseFloat(document.getElementById('raisedToInput').value) }
+                }
+            },
+            sort_order: this.currentSort
+        };
+        console.log("Requesting update with state:", state);
+        Streamlit.setComponentValue(state);
+    }
+
+     showLoading(isLoading) {
+         const indicator = document.getElementById('loading-indicator');
+         if (indicator) {
+             indicator.classList.toggle('hidden', !isLoading);
+         }
+         // Maybe also disable controls while loading
+         const controls = this.componentRoot.querySelectorAll('button, input, select');
+         controls.forEach(el => el.disabled = isLoading);
+     }
+
+
+    updateTableContent(rowsHtml) {
+        const tbody = document.getElementById('table-body');
+        if (tbody) {
+            tbody.innerHTML = rowsHtml || '<tr><td colspan="6">Loading data...</td></tr>'; // Use colspan from header
+        }
+         // Hide loading indicator once table content is updated
+         this.showLoading(false);
+    }
+
+    updatePagination() {
+        const totalPages = Math.max(1, Math.ceil(this.totalRows / this.pageSize));
+        const pageNumbers = this.generatePageNumbers(totalPages);
+        const container = document.getElementById('page-numbers');
+        if (!container) return;
+
+        container.innerHTML = pageNumbers.map(page => {
+            if (page === '...') {
+                return '<span class="page-ellipsis">...</span>';
+            }
+            // Note: Direct onclick is simple here, but could use event listeners
+            return `<button class="page-number ${page === this.currentPage ? 'active' : ''}"
+                ${page === this.currentPage ? 'disabled' : ''}
+                onclick="window.tableManagerInstance.goToPage(${page})">${page}</button>`;
+        }).join('');
+
+        document.getElementById('prev-page').disabled = this.currentPage <= 1;
+        document.getElementById('next-page').disabled = this.currentPage >= totalPages;
+    }
+
+    generatePageNumbers(totalPages) {
+        // Same logic as before
+        let pages = [];
+        if (totalPages <= 10) {
+            pages = Array.from({length: totalPages}, (_, i) => i + 1);
+        } else {
+            if (this.currentPage <= 7) {
+                pages = [...Array.from({length: 7}, (_, i) => i + 1), '...', totalPages - 1, totalPages];
+            } else if (this.currentPage >= totalPages - 6) {
+                pages = [1, 2, '...', ...Array.from({length: 7}, (_, i) => totalPages - 6 + i)];
+            } else {
+                pages = [1, 2, '...', this.currentPage - 1, this.currentPage, this.currentPage + 1, '...', totalPages - 1, totalPages];
+            }
+        }
+        return pages;
+    }
+
+    previousPage() {
+        if (this.currentPage > 1) {
+            this.currentPage--;
+            this.requestUpdate();
+        }
+    }
+
+    nextPage() {
+        const totalPages = Math.ceil(this.totalRows / this.pageSize);
+        if (this.currentPage < totalPages) {
+            this.currentPage++;
+            this.requestUpdate();
+        }
+    }
+
+    goToPage(page) {
+        const totalPages = Math.ceil(this.totalRows / this.pageSize);
+        if (page >= 1 && page <= totalPages && page !== this.currentPage) {
+            this.currentPage = page;
+            this.requestUpdate();
+        }
+    }
+
+    resetFilters() {
+        // Reset internal state representation
+        this.selectedCategories = new Set(['All Categories']);
+        this.selectedSubcategories = new Set(['All Subcategories']);
+        this.selectedCountries = new Set(['All Countries']);
+        this.selectedStates = new Set(['All States']);
+
+        // Reset UI elements explicitly
+        this.searchInput.value = '';
+        document.getElementById('sortFilter').value = 'popularity';
+        document.getElementById('dateFilter').value = 'All Time';
+
+        // Reset range sliders (use min/max from metadata)
+        const minPledged = this.minMaxValues?.pledged?.min ?? 0;
+        const maxPledged = this.minMaxValues?.pledged?.max ?? 1000;
+        const minGoal = this.minMaxValues?.goal?.min ?? 0;
+        const maxGoal = this.minMaxValues?.goal?.max ?? 10000;
+        const minRaised = this.minMaxValues?.raised?.min ?? 0;
+        const maxRaised = this.minMaxValues?.raised?.max ?? 500;
+
+        if (this.rangeSliderElements) {
+            const { fromSlider, toSlider, fromInput, toInput, /* ... other sliders/inputs */ fillSlider } = this.rangeSliderElements;
+             // Pledged
+             fromSlider.value = minPledged; toSlider.value = maxPledged;
+             fromInput.value = minPledged; toInput.value = maxPledged;
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             // Goal
+             const { goalFromSlider, goalToSlider, goalFromInput, goalToInput } = this.rangeSliderElements;
+             goalFromSlider.value = minGoal; goalToSlider.value = maxGoal;
+             goalFromInput.value = minGoal; goalToInput.value = maxGoal;
+             fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+             // Raised
+             const { raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput } = this.rangeSliderElements;
+             raisedFromSlider.value = minRaised; raisedToSlider.value = maxRaised;
+             raisedFromInput.value = minRaised; raisedToInput.value = maxRaised;
+             fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+        }
+
+        // Reset multi-select UI
+        this.updateMultiSelectUI(document.querySelectorAll('#categoryOptionsContainer .category-option'), this.selectedCategories, this.categoryBtn, 'All Categories');
+        this.updateSubcategoryOptions(); // Regenerate subcategories for 'All Categories'
+        this.updateMultiSelectUI(document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'), this.selectedSubcategories, this.subcategoryBtn, 'All Subcategories');
+        this.updateMultiSelectUI(document.querySelectorAll('#countryOptionsContainer .country-option'), this.selectedCountries, this.countryBtn, 'All Countries');
+        this.updateMultiSelectUI(document.querySelectorAll('#stateOptionsContainer .state-option'), this.selectedStates, this.stateBtn, 'All States');
+
+
+        // Set state and request update
+        this.currentPage = 1;
+        this.currentSort = 'popularity';
+        // No need to construct the full filter object here, just request the update
+        this.requestUpdate(); // Will gather the reset state from UI
+    }
+
+
+    adjustHeight() {
+         // Use requestAnimationFrame for smoother adjustments
+         requestAnimationFrame(() => {
+            const root = this.componentRoot;
+            if (!root) return;
+             // Calculate height based on rendered content
+             const totalHeight = root.offsetHeight + 50; // Add some buffer
+
+             // Check if height changed significantly to avoid rapid updates
+             if (!this.lastHeight || Math.abs(this.lastHeight - totalHeight) > 10) {
+                 this.lastHeight = totalHeight;
+                 Streamlit.setFrameHeight(totalHeight);
+                 console.log("Adjusting height to:", totalHeight);
+             }
+         });
+    }
+
+    // --- Multi-Select Logic ---
+    updateButtonText(selectedItems, buttonElement, allValueLabel) {
+         if (!buttonElement) return;
+         const selectedArray = Array.from(selectedItems);
+         const displayItems = selectedArray.filter(item => item !== allValueLabel);
+         displayItems.sort((a, b) => a.localeCompare(b)); // Sort for consistent display
+
+         if (selectedArray.length === 0 || (selectedArray.length === 1 && selectedArray[0] === allValueLabel) || displayItems.length === 0) {
+             buttonElement.textContent = allValueLabel;
+         } else if (displayItems.length > 2) {
+             buttonElement.textContent = `${displayItems[0]}, ${displayItems[1]} +${displayItems.length - 2}`;
+         } else {
+             buttonElement.textContent = displayItems.join(', ');
+         }
+    }
+
+    setupMultiSelect(options, selectedSet, allValue, buttonElement, triggerSubcategoryUpdate = false) {
+        if (!options || options.length === 0) return; // Ensure options exist
+        const allOption = Array.from(options).find(opt => opt.dataset.value === allValue);
+
+        options.forEach(option => {
+            // Clone and replace to remove previous listeners cleanly
+            const newOption = option.cloneNode(true);
+            option.parentNode.replaceChild(newOption, option);
+
+             // Add selected class based on initial set
+             if (selectedSet.has(newOption.dataset.value)) {
+                 newOption.classList.add('selected');
+             }
+
+             newOption.addEventListener('click', (e) => {
+                const clickedValue = e.target.dataset.value;
+                const isCurrentlySelected = e.target.classList.contains('selected');
+                const currentOptions = e.target.parentElement.querySelectorAll('[data-value]'); // Get current options in scope
+
+                if (clickedValue === allValue) {
+                    selectedSet.clear();
+                    selectedSet.add(allValue);
+                    currentOptions.forEach(opt => opt.classList.remove('selected'));
+                    e.target.classList.add('selected'); // Select the 'All' option
+                } else {
+                    const currentAllOption = e.target.parentElement.querySelector(`[data-value="${allValue}"]`);
+                    if (currentAllOption) {
+                        selectedSet.delete(allValue);
+                        currentAllOption.classList.remove('selected');
+                    }
+
+                    e.target.classList.toggle('selected');
+                    if (e.target.classList.contains('selected')) {
+                        selectedSet.add(clickedValue);
+                    } else {
+                        selectedSet.delete(clickedValue);
+                    }
+
+                    // If nothing selected, default back to 'All'
+                    if (selectedSet.size === 0) {
+                        selectedSet.add(allValue);
+                         if (currentAllOption) currentAllOption.classList.add('selected');
+                    }
+                }
+
+                this.updateButtonText(selectedSet, buttonElement, allValue);
+
+                if (triggerSubcategoryUpdate) {
+                    this.updateSubcategoryOptions();
+                     // Important: Need to re-setup the subcategory multi-select listeners after updating options
+                     this.setupMultiSelect(
+                         document.querySelectorAll('#subcategoryOptionsContainer .subcategory-option'),
+                         this.selectedSubcategories, // Use the current subcategory set
+                         'All Subcategories',
+                         this.subcategoryBtn // The subcategory button
+                     );
+                }
+
+                this.currentPage = 1; // Reset page on filter change
+                this.requestUpdate();
+            });
+        });
+
+        // Initial button text update
+        this.updateButtonText(selectedSet, buttonElement, allValue);
+    }
+
+
+    updateSubcategoryOptions() {
+        const selectedCategories = this.selectedCategories || new Set(['All Categories']);
+        const subcategoryMap = this.categorySubcategoryMap || {};
+        const subcategoryOptionsContainer = document.getElementById('subcategoryOptionsContainer');
+        const subcategoryBtn = document.getElementById('subcategoryFilterBtn');
+        if (!subcategoryOptionsContainer || !subcategoryBtn) return;
+
+
+        let availableSubcategories = new Set();
+        let isAllCategoriesSelected = selectedCategories.has('All Categories');
+
+        if (isAllCategoriesSelected || selectedCategories.size === 0) {
+            // Add all known subcategories if 'All Categories' is selected
+             (subcategoryMap['All Categories'] || []).forEach(subcat => availableSubcategories.add(subcat));
+        } else {
+             availableSubcategories.add('All Subcategories'); // Always include 'All Subcategories'
+             selectedCategories.forEach(cat => {
+                 (subcategoryMap[cat] || []).forEach(subcat => {
+                      if (subcat !== 'All Subcategories') { // Don't add 'All Sub...' multiple times
+                         availableSubcategories.add(subcat);
+                      }
+                 });
+             });
+        }
+
+        const sortedSubcategories = Array.from(availableSubcategories);
+        sortedSubcategories.sort((a, b) => {
+            if (a === 'All Subcategories') return -1;
+            if (b === 'All Subcategories') return 1;
+            return a.localeCompare(b);
+        });
+
+        subcategoryOptionsContainer.innerHTML = sortedSubcategories.map(opt =>
+            `<div class="subcategory-option" data-value="${opt}">${opt}</div>`
+        ).join('');
+
+        // --- Crucial: Reset subcategory selection logic when categories change ---
+        // Determine if the *current* subcategory selection is still valid given the available options
+        const availableSubSet = new Set(sortedSubcategories);
+        let resetSubcategories = false;
+        for (const subcat of this.selectedSubcategories) {
+            if (subcat !== 'All Subcategories' && !availableSubSet.has(subcat)) {
+                resetSubcategories = true;
+                break;
+            }
+        }
+        // If any selected subcategory (other than 'All') is no longer available, reset to 'All Subcategories'
+        if (resetSubcategories || this.selectedSubcategories.size === 0) {
+            this.selectedSubcategories.clear();
+            this.selectedSubcategories.add('All Subcategories');
+        }
+
+
+        // Apply 'selected' class based on the (potentially reset) selectedSubcategories set
+        const newSubOptions = subcategoryOptionsContainer.querySelectorAll('.subcategory-option');
+        newSubOptions.forEach(opt => {
+            if (this.selectedSubcategories.has(opt.dataset.value)) {
+                opt.classList.add('selected');
+            }
+        });
+
+        this.updateButtonText(this.selectedSubcategories, subcategoryBtn, 'All Subcategories');
+
+        // Re-attach listeners for the new subcategory options
+         // Note: We don't request an update here, that happens when a subcategory *itself* is clicked
+         // Or when the category change triggers an update earlier.
+         // We DO need to re-bind the listeners for the *newly created* subcategory options.
+         this.setupMultiSelect(
+             newSubOptions,
+             this.selectedSubcategories,
+             'All Subcategories',
+             this.subcategoryBtn
+         );
+    }
+
+    // --- Range Slider Logic (Mostly similar, ensure it calls requestUpdate) ---
+    setupRangeSlider() {
+        const fromSlider = document.getElementById('fromSlider');
+        const toSlider = document.getElementById('toSlider');
+        const fromInput = document.getElementById('fromInput');
+        const toInput = document.getElementById('toInput');
+        // ... (get goal and raised elements) ...
+        const goalFromSlider = document.getElementById('goalFromSlider');
+        const goalToSlider = document.getElementById('goalToSlider');
+        const goalFromInput = document.getElementById('goalFromInput');
+        const goalToInput = document.getElementById('goalToInput');
+
+        const raisedFromSlider = document.getElementById('raisedFromSlider');
+        const raisedToSlider = document.getElementById('raisedToSlider');
+        const raisedFromInput = document.getElementById('raisedFromInput');
+        const raisedToInput = document.getElementById('raisedToInput');
+
+        if (!fromSlider) return; // Exit if elements aren't rendered yet
+
+        const fillSlider = (from, to, sliderColor, rangeColor, controlSlider) => {
+            const rangeDistance = controlSlider.max - controlSlider.min;
+            const fromPosition = from.value - controlSlider.min;
+            const toPosition = to.value - controlSlider.min;
+            // Prevent division by zero or negative range distance
+             const safeRangeDistance = (rangeDistance > 0) ? rangeDistance : 1;
+            const fromPercent = (fromPosition / safeRangeDistance) * 100;
+            const toPercent = (toPosition / safeRangeDistance) * 100;
+
+            controlSlider.style.background = `linear-gradient(
+                to right,
+                ${sliderColor} 0%,
+                ${sliderColor} ${fromPercent}%,
+                ${rangeColor} ${fromPercent}%,
+                ${rangeColor} ${toPercent}%,
+                ${sliderColor} ${toPercent}%,
+                ${sliderColor} 100%)`;
+        };
+
+        const debouncedRequestUpdate = debounce(() => {
+            this.currentPage = 1; // Reset page on range change
+            this.requestUpdate();
+        }, 500); // Debounce slider/input changes
+
+        const controlFromSlider = (fromSlider, toSlider, fromInput) => {
+             const [from, to] = [parseInt(fromSlider.value), parseInt(toSlider.value)];
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             if (from > to) {
+                 fromSlider.value = to;
+                 fromInput.value = to;
+             } else {
+                  fromInput.value = from;
+             }
+        };
+
+        const controlToSlider = (fromSlider, toSlider, toInput) => {
+             const [from, to] = [parseInt(fromSlider.value), parseInt(toSlider.value)];
+             fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+             if (from <= to) {
+                 toInput.value = to;
+             } else {
+                 toInput.value = from;
+                 toSlider.value = from;
+             }
+        };
+        
+        const setupSliderListeners = (fSlider, tSlider, fInput, tInput) => {
+            fSlider.addEventListener('input', () => { controlFromSlider(fSlider, tSlider, fInput); debouncedRequestUpdate(); });
+            tSlider.addEventListener('input', () => { controlToSlider(fSlider, tSlider, tInput); debouncedRequestUpdate(); });
+            fInput.addEventListener('input', () => { /* Basic sync, validation on blur/enter */ if (parseInt(fInput.value) >= parseInt(fInput.min) && parseInt(fInput.value) <= parseInt(tSlider.value)) fSlider.value = fInput.value; fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); debouncedRequestUpdate(); });
+            tInput.addEventListener('input', () => { /* Basic sync, validation on blur/enter */ if (parseInt(tInput.value) <= parseInt(tInput.max) && parseInt(tInput.value) >= parseInt(fSlider.value)) tSlider.value = tInput.value; fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); debouncedRequestUpdate(); });
+            
+             // Add blur/enter listeners for final validation and update request
+             const validateAndUpdate = (input, isMin) => {
+                 let value = parseInt(input.value);
+                 const minAllowed = parseInt(input.min);
+                 const maxAllowed = parseInt(input.max);
+                 const otherSlider = isMin ? tSlider : fSlider;
+                 const otherValue = parseInt(otherSlider.value);
+
+                 if (isNaN(value)) value = isMin ? minAllowed : maxAllowed; // Default if invalid input
+
+                 if (isMin) {
+                     value = Math.max(minAllowed, Math.min(otherValue, value)); // Clamp between min and other slider's value
+                 } else {
+                     value = Math.min(maxAllowed, Math.max(otherValue, value)); // Clamp between other slider's value and max
+                 }
+                 input.value = value; // Update input field
+                 (isMin ? fSlider : tSlider).value = value; // Update corresponding slider
+                 fillSlider(fSlider, tSlider, '#C6C6C6', '#5932EA', tSlider); // Update visual fill
+                 debouncedRequestUpdate(); // Trigger update after validation
+             };
+
+             fInput.addEventListener('blur', () => validateAndUpdate(fInput, true));
+             tInput.addEventListener('blur', () => validateAndUpdate(tInput, false));
+             fInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); validateAndUpdate(fInput, true); } });
+             tInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); validateAndUpdate(tInput, false); } });
+        };
+
+        setupSliderListeners(fromSlider, toSlider, fromInput, toInput);
+        setupSliderListeners(goalFromSlider, goalToSlider, goalFromInput, goalToInput);
+        setupSliderListeners(raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput);
+
+        this.rangeSliderElements = {
+            fromSlider, toSlider, fromInput, toInput,
+            goalFromSlider, goalToSlider, goalFromInput, goalToInput,
+            raisedFromSlider, raisedToSlider, raisedFromInput, raisedToInput,
+            fillSlider // Store the function for reset/update
+        };
+
+        // Initial fill
+        fillSlider(fromSlider, toSlider, '#C6C6C6', '#5932EA', toSlider);
+        fillSlider(goalFromSlider, goalToSlider, '#C6C6C6', '#5932EA', goalToSlider);
+        fillSlider(raisedFromSlider, raisedToSlider, '#C6C6C6', '#5932EA', raisedToSlider);
+    }
+
+} // End of TableManager class
+
+// --- Streamlit Communication ---
+let tableManagerInstance = null;
+
+function onRender(event) {
+    const data = event.detail.args.component_data;
+    console.log("Streamlit RENDER event received:", data);
+
+    if (!window.tableManagerInstance) {
+        // First render: Create the manager instance
+        window.tableManagerInstance = new TableManager(data);
+        // Expose goToPage globally for pagination buttons
+        window.goToPage = window.tableManagerInstance.goToPage.bind(window.tableManagerInstance);
+    } else {
+        // Subsequent renders: Update the existing manager instance
+        window.tableManagerInstance.updateUIState(data); // Update filter controls, ranges, etc.
+        window.tableManagerInstance.updateTableContent(data.rows_html); // Update table rows
+        window.tableManagerInstance.updatePagination(); // Update pagination based on new totalRows/currentPage
+        window.tableManagerInstance.adjustHeight(); // Adjust height after content update
+    }
+
+    // Add ResizeObserver after the first render
+    if (!window.resizeObserver) {
+        window.resizeObserver = new ResizeObserver(debounce(() => {
+            if (window.tableManagerInstance) {
+                window.tableManagerInstance.adjustHeight();
+            }
+        }, 100)); // Debounce resize events
+
+        const rootElement = document.getElementById('component-root');
+        if (rootElement) {
+            window.resizeObserver.observe(rootElement);
+        }
+    }
+}
+
+Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+Streamlit.setComponentReady();
 """
 
-# Create and use the component
-table_component = generate_component('searchable_table', template=css + template, script=script)
-table_component(key="kickstarter_table")
+# --- Create Component Instance ---
+table_component = generate_component('kickstarter_table', template=css, script=script)
+
+
+# --- Main App Logic ---
+
+# 1. Get component state (filter/sort/page changes from JS)
+# Use a default dictionary structure matching what JS sends
+default_state = {
+    "page": st.session_state.current_page,
+    "filters": st.session_state.filters,
+    "sort_order": st.session_state.sort_order
+}
+component_value = table_component(component_data={}, key="kickstarter_state", default=default_state) # Pass empty initial data, state comes from component_value
+
+
+# 2. Update Streamlit session state based on component value
+if component_value != default_state : # Check if the state actually changed
+    print("Received new state from component:", component_value)
+    st.session_state.current_page = component_value.get("page", 1)
+    st.session_state.filters = component_value.get("filters", st.session_state.filters) # Keep old filters if none sent
+    st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
+
+
+# 3. Apply filters and sorting to the base LazyFrame
+print(f"Applying filters: {st.session_state.filters}")
+print(f"Applying sort: {st.session_state.sort_order}")
+filtered_lf = apply_filters_and_sort(
+    st.session_state.base_lf,
+    st.session_state.filters,
+    st.session_state.sort_order
+)
+
+# 4. Calculate total rows for pagination *after* filtering
+try:
+    print("Calculating total rows...")
+    start_count_time = time.time()
+    # Use fetch instead of collect for potentially faster count on some backends
+    total_rows_result = filtered_lf.select(pl.count()).collect()
+    st.session_state.total_rows = total_rows_result.item() if total_rows_result is not None and total_rows_result.height > 0 else 0
+    count_duration = time.time() - start_count_time
+    print(f"Total rows calculated: {st.session_state.total_rows} (took {count_duration:.2f}s)")
+except Exception as e:
+    st.error(f"Error calculating total rows: {e}")
+    st.session_state.total_rows = 0 # Set to 0 on error
+
+# 5. Calculate pagination details
+total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE)
+st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1)) # Clamp page number
+offset = (st.session_state.current_page - 1) * PAGE_SIZE
+
+# 6. Fetch *only* the data for the current page
+df_page = pl.DataFrame() # Default to empty DF
+if st.session_state.total_rows > 0:
+    try:
+        print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
+        start_fetch_time = time.time()
+        df_page = filtered_lf.slice(offset, PAGE_SIZE).collect(streaming=True) # Use streaming engine if beneficial
+        fetch_duration = time.time() - start_fetch_time
+        print(f"Page data fetched: {len(df_page)} rows (took {fetch_duration:.2f}s)")
+    except Exception as e:
+        st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
+        # Keep df_page empty
+else:
+    print("No rows match filters, skipping page fetch.")
+
+
+# 7. Generate HTML for the fetched page
+header_html, rows_html = generate_table_html_for_page(df_page)
+
+# 8. Prepare data payload for the component
+component_data_payload = {
+    "current_page": st.session_state.current_page,
+    "page_size": PAGE_SIZE,
+    "total_rows": st.session_state.total_rows,
+    "filters": st.session_state.filters,
+    "sort_order": st.session_state.sort_order,
+    "header_html": header_html,
+    "rows_html": rows_html,
+    # Pass necessary options/metadata for UI rendering
+    "filter_options": filter_options,
+    "category_subcategory_map": category_subcategory_map,
+    "min_max_values": min_max_values,
+}
+
+# 9. Render the component *again* with the updated data
+# The key must remain the same ("kickstarter_state") for Streamlit to handle the component value correctly
+print("Rendering component with updated data...")
+# No need to capture the return value here again, we already did at the start of the script run
+table_component(component_data=component_data_payload, key="kickstarter_state", default=default_state)
