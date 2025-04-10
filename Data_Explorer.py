@@ -1843,23 +1843,37 @@ default_state = {
 # or default_state on the first run or if the component didn't send anything.
 component_value = st.session_state.get("kickstarter_state_value", default_state)
 
+# Store previous state for comparison
+previous_page = st.session_state.current_page
+previous_filters = st.session_state.filters
+previous_sort = st.session_state.sort_order
 
 # 2. Update Streamlit session state based on the component value *from the previous run*
-# Check if the received value is different from the current session state to avoid unnecessary updates
-# (Though Streamlit handles reruns, this can sometimes help logic flow)
-if component_value.get("page") != st.session_state.current_page or \
-   component_value.get("filters") != st.session_state.filters or \
-   component_value.get("sort_order") != st.session_state.sort_order:
-    print("Received new state from component:", component_value)
-    st.session_state.current_page = component_value.get("page", st.session_state.current_page)
-    st.session_state.filters = component_value.get("filters", st.session_state.filters)
-    st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
-    # If state changed based on component value, force a recalculation/refetch even if component_value == default_state initially
-    # (This path is less likely now with the structure, but belt-and-suspenders)
-    pass # Logic proceeds to recalculate below
+#    Always try to update, as the component is the source of truth for interaction changes.
+st.session_state.current_page = component_value.get("page", st.session_state.current_page)
+st.session_state.filters = component_value.get("filters", st.session_state.filters)
+st.session_state.sort_order = component_value.get("sort_order", st.session_state.sort_order)
+
+# Check if the state *actually* changed due to the component value
+# Use json.dumps for reliable comparison of potentially nested dicts in filters
+state_changed = (
+    st.session_state.current_page != previous_page or
+    json.dumps(st.session_state.filters, sort_keys=True) != json.dumps(previous_filters, sort_keys=True) or
+    st.session_state.sort_order != previous_sort
+)
+
+# 3. If the state relevant for fetching data changed based on the component interaction, rerun immediately.
+#    The *next* run will then use the correct, updated session state from the start.
+if state_changed:
+    print("State changed based on component value, triggering rerun.")
+    # No need to explicitly store component_value back here, session state is already updated
+    st.rerun()
+
+# --- Code from here only executes if state didn't change OR after the st.rerun ---
+print("Proceeding with script execution (either initial load or after rerun)")
 
 
-# 3. Apply filters and sorting to the base LazyFrame (using updated session state)
+# 4. Apply filters and sorting to the base LazyFrame (using potentially updated session state)
 print(f"Applying filters: {st.session_state.filters}")
 print(f"Applying sort: {st.session_state.sort_order}")
 filtered_lf = apply_filters_and_sort(
@@ -1868,7 +1882,7 @@ filtered_lf = apply_filters_and_sort(
     st.session_state.sort_order
 )
 
-# 4. Calculate total rows for pagination *after* filtering
+# 5. Calculate total rows for pagination *after* filtering
 try:
     print("Calculating total rows...")
     start_count_time = time.time()
@@ -1881,14 +1895,15 @@ except Exception as e:
     st.error(f"Error calculating total rows: {e}")
     st.session_state.total_rows = 0 # Set to 0 on error
 
-# 5. Calculate pagination details
+# 6. Calculate pagination details
 total_pages = math.ceil(st.session_state.total_rows / PAGE_SIZE) if PAGE_SIZE > 0 else 1
-st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1)) # Clamp page number
+# Clamp page number *after* potential update and *before* fetching data
+st.session_state.current_page = max(1, min(st.session_state.current_page, total_pages if total_pages > 0 else 1))
 offset = (st.session_state.current_page - 1) * PAGE_SIZE
 
-# 6. Fetch *only* the data for the current page
+# 7. Fetch *only* the data for the current page
 df_page = pl.DataFrame() # Default to empty DF
-if st.session_state.total_rows > 0:
+if st.session_state.total_rows > 0 and offset < st.session_state.total_rows : # Add check offset is valid
     try:
         print(f"Fetching page {st.session_state.current_page} (offset: {offset}, limit: {PAGE_SIZE})...")
         start_fetch_time = time.time()
@@ -1899,13 +1914,19 @@ if st.session_state.total_rows > 0:
         st.error(f"Error fetching data for page {st.session_state.current_page}: {e}")
         # Keep df_page empty
 else:
-    print("No rows match filters, skipping page fetch.")
+    if st.session_state.total_rows == 0:
+         print("No rows match filters, skipping page fetch.")
+    else:
+         print(f"Calculated offset {offset} is out of bounds for total rows {st.session_state.total_rows}. Resetting page?")
+         # This case might happen if filters change drastically. Resetting to page 1 might be desired.
+         # For now, we just fetch nothing by keeping df_page empty.
 
 
-# 7. Generate HTML for the fetched page
+# 8. Generate HTML for the fetched page
 header_html, rows_html = generate_table_html_for_page(df_page)
 
-# 8. Prepare data payload for the component *for this run*
+# 9. Prepare data payload for the component *for this run*
+#    This payload reflects the state processed in *this* run.
 component_data_payload = {
     "current_page": st.session_state.current_page,
     "page_size": PAGE_SIZE,
@@ -1920,17 +1941,14 @@ component_data_payload = {
     "min_max_values": min_max_values,
 }
 
-# 9. Render the component ONCE, sending the payload and potentially getting the next state
+# 10. Render the component ONCE, sending the payload and potentially getting the next state request
 print("Rendering component...")
 # This single call sends the 'component_data_payload' to the frontend for the *current* render.
 # It returns the value that was set by 'Streamlit.setComponentValue' on the *previous* interaction in the frontend.
 # We store this returned value in session state to process it at the *start* of the *next* script run.
-st.session_state.kickstarter_state_value = table_component(
+component_return_value = table_component(
     component_data=component_data_payload,
     key="kickstarter_state", # The single key for this component instance
     default=default_state # Default value if component hasn't sent anything yet
 )
-
-print(f"--- Script execution finished for page {st.session_state.current_page} ---")
-# Remove the second call to table_component
-# table_component(component_data=component_data_payload, key="kickstarter_state", default=default_state)
+st.session_state.kickstarter_state_value = component_return_value # Store the received value for the next run
